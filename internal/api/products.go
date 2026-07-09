@@ -2,7 +2,9 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -47,12 +49,20 @@ func scanProduct(row pgx.Row) (Product, error) {
 }
 
 func (s *Server) getProducts(w http.ResponseWriter, r *http.Request) {
-	query := productQuery + ` ORDER BY l.sold DESC`
+	query := productQuery
 	args := []any{}
 	if t := r.URL.Query().Get("type"); t != "" {
-		query = productQuery + ` AND l.product_type_id = $1 ORDER BY l.sold DESC`
 		args = append(args, t)
+		query += fmt.Sprintf(` AND l.product_type_id = $%d`, len(args))
 	}
+	// pencarian: judul produk/desain, nama kreator, atau tag
+	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+		args = append(args, "%"+q+"%")
+		n := len(args)
+		query += fmt.Sprintf(` AND (pt.label || ' ' || d.title ILIKE $%d OR dr.name ILIKE $%d
+			OR EXISTS (SELECT 1 FROM unnest(d.tags) tag WHERE tag ILIKE $%d))`, n, n, n)
+	}
+	query += ` ORDER BY l.sold DESC`
 	rows, err := s.pool.Query(r.Context(), query, args...)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
