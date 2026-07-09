@@ -3,14 +3,14 @@
 Database: **PostgreSQL 16** · skema penuh di [`internal/db/schema.sql`](internal/db/schema.sql)
 (dimigrasikan otomatis saat API pertama kali start, dicatat di `schema_migrations`).
 
-20 tabel dalam 5 kelompok:
+24 tabel dalam 5 kelompok:
 
 | Kelompok | Tabel |
 |---|---|
-| **Identitas** | `users`, `designers` |
-| **Katalog** | `product_types`, `colors`, `product_type_colors`, `product_type_sizes`, `designs`, `listings` |
-| **Transaksi** | `orders`, `order_items`, `payments`, `order_events` |
-| **Kreator** | `design_submissions`, `royalties`, `payouts` |
+| **Identitas** | `users` (profil + preferensi), `designers`, `user_designs` (desain custom pribadi — tanpa royalti) |
+| **Katalog** | `product_types`, `colors`, `product_type_colors`, `product_type_sizes`, `designs`, `listings`, `categories`, `design_categories` |
+| **Transaksi** | `orders`, `order_items`, `payments`, `order_events`, `reviews` (ulasan terverifikasi + moderasi) |
+| **Kreator** | `design_submissions` (terbit jadi listing saat disetujui), `royalties`, `payouts` |
 | **Analitik** | `track_events`, `web_vitals`, `api_metrics`, `search_terms`, `day_stats` |
 
 ## Diagram ERD
@@ -19,6 +19,9 @@ Database: **PostgreSQL 16** · skema penuh di [`internal/db/schema.sql`](interna
 erDiagram
     users ||--o| designers : "profil kreator"
     users ||--o{ orders : "pesanan (nullable, guest ok)"
+    users ||--o{ user_designs : "desain custom pribadi"
+    product_types ||--o{ user_designs : ""
+    colors ||--o{ user_designs : ""
 
     designers ||--o{ designs : "membuat"
     designers ||--o{ design_submissions : "mengajukan"
@@ -34,6 +37,11 @@ erDiagram
 
     designs ||--o{ listings : "dijual sebagai"
     listings ||--o{ order_items : "dibeli via"
+    categories ||--o{ design_categories : ""
+    designs ||--o{ design_categories : ""
+    listings ||--o{ reviews : "dinilai"
+    orders ||--o{ reviews : "bukti pembelian"
+    listings ||--o| design_submissions : "diterbitkan dari"
 
     orders ||--o{ order_items : "berisi"
     orders ||--|| payments : "dibayar via"
@@ -168,6 +176,36 @@ erDiagram
         timestamptz requested_at
         timestamptz paid_at "nullable"
     }
+    categories {
+        text id PK "alam | anime | batik | ..."
+        text label
+        text emoji
+        int sort
+    }
+    design_categories {
+        text design_id PK,FK
+        text category_id PK,FK
+    }
+    reviews {
+        bigint id PK
+        text listing_id FK
+        text order_id FK "bukti pembelian; unik per pasangan"
+        text author
+        int rating "1-5"
+        text comment
+        review_status status "review | disetujui | ditolak"
+        text note "catatan moderasi"
+    }
+    user_designs {
+        bigint id PK
+        text user_id FK
+        text title
+        text product_type_id FK
+        text color_id FK
+        text uri "/uploads/... atau data-URI"
+        numeric width_cm
+        numeric offset_y_cm
+    }
     track_events {
         bigint id PK
         text session_id "sesi anonim per-tab"
@@ -227,6 +265,15 @@ erDiagram
 - **Enum PostgreSQL** untuk semua status — nilai tak valid ditolak di level database.
 - **`day_stats`** = agregat harian (di-seed untuk demo, di produksi diisi job harian dari
   `track_events`); statistik hari berjalan digabung live dari `track_events` di `GET /api/stats`.
+- **Ulasan terverifikasi**: `reviews` unik per `(order_id, listing_id)`, hanya bisa dibuat dari
+  pesanan berstatus `selesai`, dan tayang setelah moderasi. Rating listing diperbarui dengan
+  smoothing (rating lama berbobot 50 penilaian).
+- **Kategori vs tag**: `categories` terkurasi admin (navigasi belanja); `designs.tags` bebas
+  diisi kreator ala hashtag (pencarian).
+- **Desain custom pribadi** (`user_designs`): dibeli sebagai `order_items` dengan
+  `listing_id NULL` → otomatis tak pernah menghasilkan royalti dan tak tampil di katalog.
+- **Gambar** disimpan sebagai file (`uploads/` lokal; S3/R2 di produksi) — database hanya
+  menyimpan URL.
 
 ## Cara pakai
 
