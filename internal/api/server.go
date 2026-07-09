@@ -40,6 +40,7 @@ func NewServer(pool *pgxpool.Pool) *Server {
 	s.route("GET /api/products", "/api/products", s.getProducts)
 	s.route("GET /api/products/{id}", "/api/products", s.getProduct)
 	s.route("GET /api/categories", "/api/categories", s.getCategories)
+	s.route("PATCH /api/listings/{id}", "/api/listings", s.patchListing)
 	s.route("GET /api/reviews", "/api/reviews", s.getReviews)
 	s.route("POST /api/reviews", "/api/reviews", s.postReview)
 	s.route("PATCH /api/reviews", "/api/reviews", s.patchReview)
