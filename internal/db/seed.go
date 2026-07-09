@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -59,6 +61,20 @@ type seedCatalog struct {
 // physical print areas per product type (cm) — mirrors PRINT_CM in the frontend
 var printAreas = map[string][2]float64{
 	"kaos": {30, 40}, "hoodie": {28, 30}, "mug": {9, 8.5}, "totebag": {25, 30},
+}
+
+// avatarURI: foto profil bawaan — inisial di atas warna khas kreator.
+// Sama dengan backfill di migrations/003 dan lib/avatar.ts di frontend.
+func avatarURI(hue int, name string) string {
+	initials := ""
+	for _, part := range strings.Fields(name) {
+		initials += strings.ToUpper(part[:1])
+		if len(initials) == 2 {
+			break
+		}
+	}
+	svg := fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><rect width="80" height="80" rx="40" fill="hsl(%d 48%% 36%%)"/><text x="40" y="51" font-family="Arial,sans-serif" font-size="30" font-weight="700" fill="#fff" text-anchor="middle">%s</text></svg>`, hue, initials)
+	return "data:image/svg+xml," + url.PathEscape(svg)
 }
 
 // SeedIfEmpty populates catalog + 14 days of demo analytics on first run.
@@ -130,8 +146,8 @@ func SeedIfEmpty(ctx context.Context, pool *pgxpool.Pool) error {
 			userID = "u-raka"
 		}
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO designers (id, user_id, name, city, bio, hue, followers, rating) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-			d.ID, userID, d.Name, d.City, d.Bio, d.Hue, d.Followers, d.Rating); err != nil {
+			`INSERT INTO designers (id, user_id, name, city, bio, hue, followers, rating, avatar_uri) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+			d.ID, userID, d.Name, d.City, d.Bio, d.Hue, d.Followers, d.Rating, avatarURI(d.Hue, d.Name)); err != nil {
 			return err
 		}
 	}

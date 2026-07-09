@@ -1,0 +1,11 @@
+-- Foto profil kreator: data-URI SVG (inisial di atas warna khas kreator).
+-- Kolom siap menampung URL foto asli saat upload profil tersedia.
+
+ALTER TABLE designers ADD COLUMN avatar_uri text NOT NULL DEFAULT '';
+
+-- Backfill untuk database lama; database baru diisi oleh seeder
+-- (internal/db/seed.go — fungsi avatarURI menghasilkan SVG yang sama).
+UPDATE designers SET avatar_uri = 'data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2080%2080%22%3E%3Crect%20width=%2280%22%20height=%2280%22%20rx=%2240%22%20fill=%22hsl(152%2048%25%2036%25)%22/%3E%3Ctext%20x=%2240%22%20y=%2251%22%20font-family=%22Arial,sans-serif%22%20font-size=%2230%22%20font-weight=%22700%22%20fill=%22%23fff%22%20text-anchor=%22middle%22%3ERW%3C/text%3E%3C/svg%3E' WHERE id = 'd-raka' AND avatar_uri = '';
+UPDATE designers SET avatar_uri = 'data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2080%2080%22%3E%3Crect%20width=%2280%22%20height=%2280%22%20rx=%2240%22%20fill=%22hsl(24%2048%25%2036%25)%22/%3E%3Ctext%20x=%2240%22%20y=%2251%22%20font-family=%22Arial,sans-serif%22%20font-size=%2230%22%20font-weight=%22700%22%20fill=%22%23fff%22%20text-anchor=%22middle%22%3ESK%3C/text%3E%3C/svg%3E' WHERE id = 'd-sari' AND avatar_uri = '';
+UPDATE designers SET avatar_uri = 'data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2080%2080%22%3E%3Crect%20width=%2280%22%20height=%2280%22%20rx=%2240%22%20fill=%22hsl(226%2048%25%2036%25)%22/%3E%3Ctext%20x=%2240%22%20y=%2251%22%20font-family=%22Arial,sans-serif%22%20font-size=%2230%22%20font-weight=%22700%22%20fill=%22%23fff%22%20text-anchor=%22middle%22%3EBP%3C/text%3E%3C/svg%3E' WHERE id = 'd-bima' AND avatar_uri = '';
+UPDATE designers SET avatar_uri = 'data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2080%2080%22%3E%3Crect%20width=%2280%22%20height=%2280%22%20rx=%2240%22%20fill=%22hsl(190%2048%25%2036%25)%22/%3E%3Ctext%20x=%2240%22%20y=%2251%22%20font-family=%22Arial,sans-serif%22%20font-size=%2230%22%20font-weight=%22700%22%20fill=%22%23fff%22%20text-anchor=%22middle%22%3ETM%3C/text%3E%3C/svg%3E' WHERE id = 'd-tiara' AND avatar_uri = '';
