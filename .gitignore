@@ -2,3 +2,4 @@ bin/
 *.exe
 .env
 *.log
+uploads/

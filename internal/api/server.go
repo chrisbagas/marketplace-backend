@@ -11,12 +11,13 @@ import (
 )
 
 type Server struct {
-	pool *pgxpool.Pool
-	mux  *http.ServeMux
+	pool      *pgxpool.Pool
+	mux       *http.ServeMux
+	uploadDir string
 }
 
-func NewServer(pool *pgxpool.Pool) *Server {
-	s := &Server{pool: pool, mux: http.NewServeMux()}
+func NewServer(pool *pgxpool.Pool, uploadDir string) *Server {
+	s := &Server{pool: pool, mux: http.NewServeMux(), uploadDir: uploadDir}
 
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := pool.Ping(r.Context()); err != nil {
@@ -41,6 +42,8 @@ func NewServer(pool *pgxpool.Pool) *Server {
 	s.route("GET /api/products/{id}", "/api/products", s.getProduct)
 	s.route("GET /api/categories", "/api/categories", s.getCategories)
 	s.route("PATCH /api/listings/{id}", "/api/listings", s.patchListing)
+	s.route("POST /api/uploads", "/api/uploads", s.postUpload)
+	s.mux.Handle("GET /uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadDir))))
 	s.route("GET /api/reviews", "/api/reviews", s.getReviews)
 	s.route("POST /api/reviews", "/api/reviews", s.postReview)
 	s.route("PATCH /api/reviews", "/api/reviews", s.patchReview)
