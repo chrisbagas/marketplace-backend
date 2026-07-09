@@ -21,8 +21,9 @@ type Product struct {
 	Badge        string   `json:"badge,omitempty"`
 	Title        string   `json:"title"`
 	DesignURI    string   `json:"designUri"`
-	DesignerName string   `json:"designerName"`
-	DesignerID   string   `json:"designerId"`
+	DesignerName   string `json:"designerName"`
+	DesignerID     string `json:"designerId"`
+	DesignerAvatar string `json:"designerAvatar"`
 	TypeLabel    string   `json:"typeLabel"`
 	Sizes        []string `json:"sizes"`
 	ColorIds     []string `json:"colorIds"`
@@ -32,7 +33,7 @@ type Product struct {
 
 const productQuery = `
 	SELECT l.id, l.design_id, l.product_type_id, l.price, l.sold, l.rating, COALESCE(l.badge,''),
-	       pt.label || ' ' || d.title, d.uri, dr.name, dr.id, pt.label, d.tags,
+	       pt.label || ' ' || d.title, d.uri, dr.name, dr.id, dr.avatar_uri, pt.label, d.tags,
 	       (SELECT COALESCE(array_agg(size ORDER BY sort), '{}') FROM product_type_sizes WHERE product_type_id = pt.id),
 	       (SELECT COALESCE(array_agg(color_id ORDER BY sort), '{}') FROM product_type_colors WHERE product_type_id = pt.id),
 	       (SELECT COALESCE(array_agg(category_id), '{}') FROM design_categories WHERE design_id = d.id)
@@ -45,7 +46,7 @@ const productQuery = `
 func scanProduct(row pgx.Row) (Product, error) {
 	var p Product
 	err := row.Scan(&p.ID, &p.DesignID, &p.Type, &p.Price, &p.Sold, &p.Rating, &p.Badge,
-		&p.Title, &p.DesignURI, &p.DesignerName, &p.DesignerID, &p.TypeLabel, &p.Tags,
+		&p.Title, &p.DesignURI, &p.DesignerName, &p.DesignerID, &p.DesignerAvatar, &p.TypeLabel, &p.Tags,
 		&p.Sizes, &p.ColorIds, &p.Categories)
 	return p, err
 }
