@@ -245,6 +245,19 @@ func SeedIfEmpty(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 
+	// --- ulasan demo dari pesanan yang sudah selesai ---
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO reviews (listing_id, order_id, author, rating, comment, status)
+		SELECT DISTINCT ON (o.id) oi.listing_id, o.id, o.cust_name, 5,
+		       'Kualitas cetaknya bagus, warna tajam dan bahannya adem. Recommended!',
+		       'disetujui'::review_status
+		FROM orders o
+		JOIN order_items oi ON oi.order_id = o.id
+		WHERE o.status = 'selesai' AND oi.listing_id IS NOT NULL
+		ON CONFLICT DO NOTHING`); err != nil {
+		return err
+	}
+
 	// --- contoh payout kreator ---
 	payouts := []struct {
 		designer string
