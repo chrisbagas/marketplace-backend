@@ -1,0 +1,336 @@
+{
+ "productTypes": {
+  "kaos": {
+   "label": "Kaos",
+   "base": 95000,
+   "sizes": [
+    "S",
+    "M",
+    "L",
+    "XL",
+    "XXL"
+   ],
+   "colorIds": [
+    "putih",
+    "hitam",
+    "navy",
+    "krem",
+    "sage"
+   ]
+  },
+  "hoodie": {
+   "label": "Hoodie",
+   "base": 225000,
+   "sizes": [
+    "S",
+    "M",
+    "L",
+    "XL",
+    "XXL"
+   ],
+   "colorIds": [
+    "hitam",
+    "navy",
+    "krem",
+    "sage"
+   ]
+  },
+  "mug": {
+   "label": "Mug",
+   "base": 65000,
+   "sizes": [
+    "330 ml"
+   ],
+   "colorIds": [
+    "putih",
+    "krem"
+   ]
+  },
+  "totebag": {
+   "label": "Totebag",
+   "base": 79000,
+   "sizes": [
+    "38×42 cm"
+   ],
+   "colorIds": [
+    "krem",
+    "putih",
+    "hitam"
+   ]
+  }
+ },
+ "colors": {
+  "putih": {
+   "label": "Putih",
+   "hex": "#f4f2ec"
+  },
+  "hitam": {
+   "label": "Hitam",
+   "hex": "#26241f"
+  },
+  "navy": {
+   "label": "Navy",
+   "hex": "#26324e"
+  },
+  "krem": {
+   "label": "Krem",
+   "hex": "#e7dcc4"
+  },
+  "sage": {
+   "label": "Sage",
+   "hex": "#a3b899"
+  }
+ },
+ "designers": [
+  {
+   "id": "d-raka",
+   "name": "Raka Wijaya",
+   "city": "Yogyakarta",
+   "hue": 152,
+   "followers": 12400,
+   "rating": 4.9,
+   "bio": "Ilustrator retro yang jatuh cinta pada senja dan gunung."
+  },
+  {
+   "id": "d-sari",
+   "name": "Sari Kusuma",
+   "city": "Bandung",
+   "hue": 24,
+   "followers": 8900,
+   "rating": 4.8,
+   "bio": "Tipografi jenaka tentang kopi, kerja, dan kuliner Indonesia."
+  },
+  {
+   "id": "d-bima",
+   "name": "Bima Prasetyo",
+   "city": "Solo",
+   "hue": 226,
+   "followers": 15200,
+   "rating": 4.9,
+   "bio": "Menerjemahkan batik klasik ke bahasa desain kontemporer."
+  },
+  {
+   "id": "d-tiara",
+   "name": "Tiara Maharani",
+   "city": "Denpasar",
+   "hue": 190,
+   "followers": 6700,
+   "rating": 4.7,
+   "bio": "Ilustrasi laut & kampanye konservasi. 5% royalti untuk bersih pantai."
+  }
+ ],
+ "designs": [
+  {
+   "id": "anak-senja",
+   "title": "Anak Senja",
+   "designerId": "d-raka",
+   "uri": "data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%20480%20480'%3E%0A%3Cdefs%3E%3CclipPath%20id%3D'c'%3E%3Ccircle%20cx%3D'240'%20cy%3D'190'%20r%3D'140'%2F%3E%3C%2FclipPath%3E%3C%2Fdefs%3E%0A%3Cg%20clip-path%3D'url(%23c)'%3E%0A%3Crect%20x%3D'100'%20y%3D'50'%20width%3D'280'%20height%3D'44'%20fill%3D'%23ffc24b'%2F%3E%0A%3Crect%20x%3D'100'%20y%3D'102'%20width%3D'280'%20height%3D'40'%20fill%3D'%23ff9e43'%2F%3E%0A%3Crect%20x%3D'100'%20y%3D'150'%20width%3D'280'%20height%3D'36'%20fill%3D'%23ff7a50'%2F%3E%0A%3Crect%20x%3D'100'%20y%3D'194'%20width%3D'280'%20height%3D'32'%20fill%3D'%23f55b6c'%2F%3E%0A%3Crect%20x%3D'100'%20y%3D'234'%20width%3D'280'%20height%3D'28'%20fill%3D'%23d94a76'%2F%3E%0A%3Crect%20x%3D'100'%20y%3D'270'%20width%3D'280'%20height%3D'60'%20fill%3D'%238e3b74'%2F%3E%0A%3C%2Fg%3E%0A%3Cpath%20d%3D'M120%20330%20L200%20250%20L250%20300%20L310%20240%20L360%20330%20Z'%20fill%3D'%233b2350'%2F%3E%0A%3Ctext%20x%3D'240'%20y%3D'398'%20text-anchor%3D'middle'%20font-family%3D'Segoe%20UI%2C%20Arial%2C%20sans-serif'%20font-size%3D'46'%20font-weight%3D'800'%20letter-spacing%3D'8'%20fill%3D'%233b2350'%3EANAK%20SENJA%3C%2Ftext%3E%0A%3Ctext%20x%3D'240'%20y%3D'428'%20text-anchor%3D'middle'%20font-family%3D'Segoe%20UI%2C%20Arial%2C%20sans-serif'%20font-size%3D'16'%20letter-spacing%3D'6'%20fill%3D'%23d94a76'%3ENUSANTARA%20GOLDEN%20HOUR%3C%2Ftext%3E%0A%3C%2Fsvg%3E",
+   "tags": [
+    "retro",
+    "senja",
+    "typography"
+   ]
+  },
+  {
+   "id": "kopi-dulu",
+   "title": "Kopi Dulu, Kerja Kemudian",
+   "designerId": "d-sari",
+   "uri": "data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%20480%20480'%3E%0A%3Cg%20stroke%3D'%234a2f23'%20stroke-width%3D'10'%20fill%3D'none'%20stroke-linecap%3D'round'%3E%0A%3Cpath%20d%3D'M170%2070%20q-14%2026%200%2048%20q14%2022%200%2044'%2F%3E%0A%3Cpath%20d%3D'M240%2056%20q-14%2026%200%2048%20q14%2022%200%2044'%2F%3E%0A%3Cpath%20d%3D'M310%2070%20q-14%2026%200%2048%20q14%2022%200%2044'%2F%3E%0A%3C%2Fg%3E%0A%3Cpath%20d%3D'M140%20180%20h200%20v70%20a100%20100%200%200%201%20-200%200%20Z'%20fill%3D'%234a2f23'%2F%3E%0A%3Cpath%20d%3D'M340%20195%20h24%20a30%2030%200%200%201%200%2060%20h-30'%20fill%3D'none'%20stroke%3D'%234a2f23'%20stroke-width%3D'12'%2F%3E%0A%3Crect%20x%3D'120'%20y%3D'300'%20width%3D'240'%20height%3D'14'%20rx%3D'7'%20fill%3D'%234a2f23'%2F%3E%0A%3Ctext%20x%3D'240'%20y%3D'370'%20text-anchor%3D'middle'%20font-family%3D'Segoe%20UI%2C%20Arial%2C%20sans-serif'%20font-size%3D'44'%20font-weight%3D'800'%20fill%3D'%234a2f23'%3EKOPI%20DULU%2C%3C%2Ftext%3E%0A%3Ctext%20x%3D'240'%20y%3D'420'%20text-anchor%3D'middle'%20font-family%3D'Segoe%20UI%2C%20Arial%2C%20sans-serif'%20font-size%3D'34'%20font-weight%3D'700'%20letter-spacing%3D'2'%20fill%3D'%23b0673e'%3EKERJA%20KEMUDIAN%3C%2Ftext%3E%0A%3C%2Fsvg%3E",
+   "tags": [
+    "kopi",
+    "quotes"
+   ]
+  },
+  {
+   "id": "kawung-modern",
+   "title": "Kawung Modern",
+   "designerId": "d-bima",
+   "uri": "data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%20480%20480'%3E%0A%3Cdefs%3E%3Cpattern%20id%3D'kw'%20width%3D'96'%20height%3D'96'%20patternUnits%3D'userSpaceOnUse'%3E%0A%3Cg%20fill%3D'%232b3a67'%3E%0A%3Cellipse%20cx%3D'48'%20cy%3D'14'%20rx%3D'16'%20ry%3D'26'%2F%3E%0A%3Cellipse%20cx%3D'48'%20cy%3D'82'%20rx%3D'16'%20ry%3D'26'%2F%3E%0A%3Cellipse%20cx%3D'14'%20cy%3D'48'%20rx%3D'26'%20ry%3D'16'%2F%3E%0A%3Cellipse%20cx%3D'82'%20cy%3D'48'%20rx%3D'26'%20ry%3D'16'%2F%3E%0A%3C%2Fg%3E%0A%3Ccircle%20cx%3D'48'%20cy%3D'48'%20r%3D'7'%20fill%3D'%23d9a441'%2F%3E%0A%3Ccircle%20cx%3D'0'%20cy%3D'0'%20r%3D'5'%20fill%3D'%23d9a441'%2F%3E%3Ccircle%20cx%3D'96'%20cy%3D'0'%20r%3D'5'%20fill%3D'%23d9a441'%2F%3E%0A%3Ccircle%20cx%3D'0'%20cy%3D'96'%20r%3D'5'%20fill%3D'%23d9a441'%2F%3E%3Ccircle%20cx%3D'96'%20cy%3D'96'%20r%3D'5'%20fill%3D'%23d9a441'%2F%3E%0A%3C%2Fpattern%3E%0A%3CclipPath%20id%3D'r'%3E%3Crect%20x%3D'48'%20y%3D'28'%20width%3D'384'%20height%3D'384'%20rx%3D'28'%2F%3E%3C%2FclipPath%3E%3C%2Fdefs%3E%0A%3Cg%20clip-path%3D'url(%23r)'%3E%3Crect%20x%3D'48'%20y%3D'28'%20width%3D'384'%20height%3D'384'%20fill%3D'url(%23kw)'%2F%3E%3C%2Fg%3E%0A%3Crect%20x%3D'48'%20y%3D'28'%20width%3D'384'%20height%3D'384'%20rx%3D'28'%20fill%3D'none'%20stroke%3D'%232b3a67'%20stroke-width%3D'8'%2F%3E%0A%3Ctext%20x%3D'240'%20y%3D'456'%20text-anchor%3D'middle'%20font-family%3D'Segoe%20UI%2C%20Arial%2C%20sans-serif'%20font-size%3D'26'%20font-weight%3D'700'%20letter-spacing%3D'10'%20fill%3D'%232b3a67'%3EKAWUNG%20MODERN%3C%2Ftext%3E%0A%3C%2Fsvg%3E",
+   "tags": [
+    "batik",
+    "pattern",
+    "heritage"
+   ]
+  },
+  {
+   "id": "komodo-trail",
+   "title": "Komodo Trail",
+   "designerId": "d-raka",
+   "uri": "data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%20480%20480'%3E%0A%3Ccircle%20cx%3D'240'%20cy%3D'220'%20r%3D'168'%20fill%3D'none'%20stroke%3D'%23264d3b'%20stroke-width%3D'12'%2F%3E%0A%3Ccircle%20cx%3D'240'%20cy%3D'220'%20r%3D'140'%20fill%3D'%23f0e7d2'%2F%3E%0A%3Ccircle%20cx%3D'285'%20cy%3D'160'%20r%3D'34'%20fill%3D'%23e8a13c'%2F%3E%0A%3Cpath%20d%3D'M110%20290%20L180%20190%20L225%20250%20L275%20175%20L370%20290%20Z'%20fill%3D'%23264d3b'%2F%3E%0A%3Cpath%20d%3D'M110%20290%20h260%20v18%20h-260%20Z'%20fill%3D'%236f8f7f'%2F%3E%0A%3Crect%20x%3D'96'%20y%3D'330'%20width%3D'288'%20height%3D'54'%20rx%3D'10'%20fill%3D'%23264d3b'%2F%3E%0A%3Ctext%20x%3D'240'%20y%3D'366'%20text-anchor%3D'middle'%20font-family%3D'Segoe%20UI%2C%20Arial%2C%20sans-serif'%20font-size%3D'30'%20font-weight%3D'800'%20letter-spacing%3D'3'%20fill%3D'%23f0e7d2'%3EKOMODO%20TRAIL%3C%2Ftext%3E%0A%3Ctext%20x%3D'240'%20y%3D'426'%20text-anchor%3D'middle'%20font-family%3D'Segoe%20UI%2C%20Arial%2C%20sans-serif'%20font-size%3D'20'%20letter-spacing%3D'8'%20fill%3D'%23264d3b'%3EFLORES%20%26%238226%3B%20NTT%20%26%238226%3B%201991%3C%2Ftext%3E%0A%3C%2Fsvg%3E",
+   "tags": [
+    "travel",
+    "badge",
+    "flores"
+   ]
+  },
+  {
+   "id": "ombak-nusantara",
+   "title": "Ombak Nusantara",
+   "designerId": "d-tiara",
+   "uri": "data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%20480%20480'%3E%0A%3Cdefs%3E%3CclipPath%20id%3D'o'%3E%3Crect%20x%3D'60'%20y%3D'60'%20width%3D'360'%20height%3D'300'%20rx%3D'24'%2F%3E%3C%2FclipPath%3E%3C%2Fdefs%3E%0A%3Cg%20clip-path%3D'url(%23o)'%3E%0A%3Crect%20x%3D'60'%20y%3D'60'%20width%3D'360'%20height%3D'300'%20fill%3D'%23eaf4fb'%2F%3E%0A%3Ccircle%20cx%3D'330'%20cy%3D'140'%20r%3D'44'%20fill%3D'%23f5a524'%2F%3E%0A%3Cpath%20d%3D'M40%20250%20q60%20-60%20120%200%20t120%200%20t120%200%20t120%200%20v140%20h-480%20Z'%20fill%3D'%2367b3e3'%2F%3E%0A%3Cpath%20d%3D'M20%20285%20q60%20-55%20120%200%20t120%200%20t120%200%20t120%200%20v110%20h-500%20Z'%20fill%3D'%231d7fcb'%2F%3E%0A%3Cpath%20d%3D'M0%20320%20q60%20-50%20120%200%20t120%200%20t120%200%20t120%200%20v80%20h-520%20Z'%20fill%3D'%230e5fa8'%2F%3E%0A%3C%2Fg%3E%0A%3Crect%20x%3D'60'%20y%3D'60'%20width%3D'360'%20height%3D'300'%20rx%3D'24'%20fill%3D'none'%20stroke%3D'%230e5fa8'%20stroke-width%3D'8'%2F%3E%0A%3Ctext%20x%3D'240'%20y%3D'420'%20text-anchor%3D'middle'%20font-family%3D'Segoe%20UI%2C%20Arial%2C%20sans-serif'%20font-size%3D'38'%20font-weight%3D'800'%20letter-spacing%3D'6'%20fill%3D'%230e5fa8'%3EOMBAK%20NUSANTARA%3C%2Ftext%3E%0A%3C%2Fsvg%3E",
+   "tags": [
+    "laut",
+    "ilustrasi"
+   ]
+  },
+  {
+   "id": "jaga-laut",
+   "title": "Jaga Laut",
+   "designerId": "d-tiara",
+   "uri": "data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%20480%20480'%3E%0A%3Cg%3E%0A%3Cellipse%20cx%3D'240'%20cy%3D'210'%20rx%3D'120'%20ry%3D'104'%20fill%3D'%230f766e'%2F%3E%0A%3Cg%20fill%3D'%2314b8a6'%3E%0A%3Cpolygon%20points%3D'240%2C130%20300%2C165%20300%2C235%20240%2C270%20180%2C235%20180%2C165'%2F%3E%0A%3C%2Fg%3E%0A%3Cg%20fill%3D'%230f766e'%3E%0A%3Cpolygon%20points%3D'240%2C150%20282%2C175%20282%2C225%20240%2C250%20198%2C225%20198%2C175'%20opacity%3D'0.5'%2F%3E%0A%3C%2Fg%3E%0A%3Ccircle%20cx%3D'240'%20cy%3D'84'%20r%3D'34'%20fill%3D'%230f766e'%2F%3E%0A%3Ccircle%20cx%3D'228'%20cy%3D'78'%20r%3D'5'%20fill%3D'%23ecfdf5'%2F%3E%3Ccircle%20cx%3D'252'%20cy%3D'78'%20r%3D'5'%20fill%3D'%23ecfdf5'%2F%3E%0A%3Cellipse%20cx%3D'118'%20cy%3D'170'%20rx%3D'40'%20ry%3D'18'%20fill%3D'%230f766e'%20transform%3D'rotate(-30%20118%20170)'%2F%3E%0A%3Cellipse%20cx%3D'362'%20cy%3D'170'%20rx%3D'40'%20ry%3D'18'%20fill%3D'%230f766e'%20transform%3D'rotate(30%20362%20170)'%2F%3E%0A%3Cellipse%20cx%3D'130'%20cy%3D'290'%20rx%3D'34'%20ry%3D'16'%20fill%3D'%230f766e'%20transform%3D'rotate(30%20130%20290)'%2F%3E%0A%3Cellipse%20cx%3D'350'%20cy%3D'290'%20rx%3D'34'%20ry%3D'16'%20fill%3D'%230f766e'%20transform%3D'rotate(-30%20350%20290)'%2F%3E%0A%3C%2Fg%3E%0A%3Ctext%20x%3D'240'%20y%3D'396'%20text-anchor%3D'middle'%20font-family%3D'Segoe%20UI%2C%20Arial%2C%20sans-serif'%20font-size%3D'42'%20font-weight%3D'800'%20letter-spacing%3D'4'%20fill%3D'%230f766e'%3EJAGA%20LAUT%3C%2Ftext%3E%0A%3Ctext%20x%3D'240'%20y%3D'430'%20text-anchor%3D'middle'%20font-family%3D'Segoe%20UI%2C%20Arial%2C%20sans-serif'%20font-size%3D'18'%20letter-spacing%3D'6'%20fill%3D'%2314b8a6'%3ESATU%20SAMPAH%20PUN%20BERARTI%3C%2Ftext%3E%0A%3C%2Fsvg%3E",
+   "tags": [
+    "laut",
+    "kampanye",
+    "penyu"
+   ]
+  },
+  {
+   "id": "rendang-love",
+   "title": "Rendang Is My Love Language",
+   "designerId": "d-sari",
+   "uri": "data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%20480%20480'%3E%0A%3Ctext%20x%3D'240'%20y%3D'150'%20text-anchor%3D'middle'%20font-family%3D'Segoe%20UI%2C%20Arial%2C%20sans-serif'%20font-size%3D'72'%20font-weight%3D'900'%20letter-spacing%3D'2'%20fill%3D'%23b33a2b'%3ERENDANG%3C%2Ftext%3E%0A%3Ctext%20x%3D'240'%20y%3D'210'%20text-anchor%3D'middle'%20font-family%3D'Segoe%20UI%2C%20Arial%2C%20sans-serif'%20font-size%3D'30'%20font-weight%3D'600'%20letter-spacing%3D'10'%20fill%3D'%231c1814'%3EIS%20MY%3C%2Ftext%3E%0A%3Ctext%20x%3D'240'%20y%3D'280'%20text-anchor%3D'middle'%20font-family%3D'Segoe%20UI%2C%20Arial%2C%20sans-serif'%20font-size%3D'48'%20font-weight%3D'800'%20fill%3D'%23e08e0b'%3ELOVE%20LANGUAGE%3C%2Ftext%3E%0A%3Cg%20transform%3D'translate(240%20360)'%3E%0A%3Cpath%20d%3D'M-14%20-30%20q-40%2010%20-34%2058%20q4%2030%2034%2030%20q30%200%2034%20-30%20q6%20-48%20-34%20-58'%20fill%3D'%23c62828'%2F%3E%0A%3Cpath%20d%3D'M-14%20-30%20q6%20-18%2024%20-20%20q-2%2014%20-10%2022%20Z'%20fill%3D'%232e7d32'%2F%3E%0A%3C%2Fg%3E%0A%3Ctext%20x%3D'240'%20y%3D'452'%20text-anchor%3D'middle'%20font-family%3D'Segoe%20UI%2C%20Arial%2C%20sans-serif'%20font-size%3D'16'%20letter-spacing%3D'6'%20fill%3D'%23b33a2b'%3EMASAKAN%20PALING%20ENAK%20SEDUNIA%3C%2Ftext%3E%0A%3C%2Fsvg%3E",
+   "tags": [
+    "kuliner",
+    "quotes"
+   ]
+  },
+  {
+   "id": "tropis",
+   "title": "Tropis",
+   "designerId": "d-bima",
+   "uri": "data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%20480%20480'%3E%0A%3Cg%20fill%3D'%231f8f63'%3E%0A%3Cpath%20d%3D'M150%20320%20C90%20250%20100%20130%20200%2090%20C185%20140%20190%20170%20210%20200%20C160%20205%20150%20260%20150%20320%20Z'%2F%3E%0A%3Cpath%20d%3D'M240%20340%20C200%20220%20240%20100%20340%2080%20C310%20130%20315%20175%20345%20210%20C280%20210%20255%20270%20240%20340%20Z'%20opacity%3D'0.85'%2F%3E%0A%3Cpath%20d%3D'M320%20330%20C330%20250%20380%20200%20430%20200%20C410%20240%20415%20270%20435%20300%20C390%20300%20350%20315%20320%20330%20Z'%20opacity%3D'0.7'%2F%3E%0A%3C%2Fg%3E%0A%3Ccircle%20cx%3D'140'%20cy%3D'120'%20r%3D'36'%20fill%3D'%23f5a524'%2F%3E%0A%3Ctext%20x%3D'240'%20y%3D'420'%20text-anchor%3D'middle'%20font-family%3D'Segoe%20UI%2C%20Arial%2C%20sans-serif'%20font-size%3D'44'%20font-weight%3D'800'%20letter-spacing%3D'12'%20fill%3D'%231f8f63'%3ETROPIS%3C%2Ftext%3E%0A%3Ctext%20x%3D'240'%20y%3D'452'%20text-anchor%3D'middle'%20font-family%3D'Segoe%20UI%2C%20Arial%2C%20sans-serif'%20font-size%3D'16'%20letter-spacing%3D'5'%20fill%3D'%23e08e0b'%3ESELALU%20MUSIM%20PANAS%3C%2Ftext%3E%0A%3C%2Fsvg%3E",
+   "tags": [
+    "botani",
+    "tropis"
+   ]
+  }
+ ],
+ "listings": [
+  {
+   "id": "kaos-anak-senja",
+   "designId": "anak-senja",
+   "type": "kaos",
+   "price": 129000,
+   "sold": 1284,
+   "rating": 4.9,
+   "badge": "Terlaris"
+  },
+  {
+   "id": "hoodie-anak-senja",
+   "designId": "anak-senja",
+   "type": "hoodie",
+   "price": 279000,
+   "sold": 431,
+   "rating": 4.8
+  },
+  {
+   "id": "kaos-kopi-dulu",
+   "designId": "kopi-dulu",
+   "type": "kaos",
+   "price": 119000,
+   "sold": 967,
+   "rating": 4.8
+  },
+  {
+   "id": "mug-kopi-dulu",
+   "designId": "kopi-dulu",
+   "type": "mug",
+   "price": 89000,
+   "sold": 2105,
+   "rating": 4.9,
+   "badge": "Favorit kantor"
+  },
+  {
+   "id": "kaos-kawung",
+   "designId": "kawung-modern",
+   "type": "kaos",
+   "price": 135000,
+   "sold": 758,
+   "rating": 4.9
+  },
+  {
+   "id": "totebag-kawung",
+   "designId": "kawung-modern",
+   "type": "totebag",
+   "price": 99000,
+   "sold": 1440,
+   "rating": 4.9,
+   "badge": "Terlaris"
+  },
+  {
+   "id": "kaos-komodo",
+   "designId": "komodo-trail",
+   "type": "kaos",
+   "price": 129000,
+   "sold": 512,
+   "rating": 4.7
+  },
+  {
+   "id": "hoodie-komodo",
+   "designId": "komodo-trail",
+   "type": "hoodie",
+   "price": 285000,
+   "sold": 198,
+   "rating": 4.8,
+   "badge": "Baru"
+  },
+  {
+   "id": "kaos-ombak",
+   "designId": "ombak-nusantara",
+   "type": "kaos",
+   "price": 125000,
+   "sold": 623,
+   "rating": 4.8
+  },
+  {
+   "id": "totebag-jaga-laut",
+   "designId": "jaga-laut",
+   "type": "totebag",
+   "price": 95000,
+   "sold": 884,
+   "rating": 4.9
+  },
+  {
+   "id": "kaos-jaga-laut",
+   "designId": "jaga-laut",
+   "type": "kaos",
+   "price": 119000,
+   "sold": 445,
+   "rating": 4.8
+  },
+  {
+   "id": "kaos-rendang",
+   "designId": "rendang-love",
+   "type": "kaos",
+   "price": 119000,
+   "sold": 1032,
+   "rating": 4.9,
+   "badge": "Terlaris"
+  },
+  {
+   "id": "mug-rendang",
+   "designId": "rendang-love",
+   "type": "mug",
+   "price": 85000,
+   "sold": 690,
+   "rating": 4.8
+  },
+  {
+   "id": "kaos-tropis",
+   "designId": "tropis",
+   "type": "kaos",
+   "price": 125000,
+   "sold": 377,
+   "rating": 4.7,
+   "badge": "Baru"
+  },
+  {
+   "id": "hoodie-tropis",
+   "designId": "tropis",
+   "type": "hoodie",
+   "price": 275000,
+   "sold": 121,
+   "rating": 4.8
+  }
+ ]
+}
