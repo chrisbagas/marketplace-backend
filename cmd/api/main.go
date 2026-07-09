@@ -35,8 +35,16 @@ func main() {
 		log.Fatalf("seed gagal: %v", err)
 	}
 
-	log.Printf("KaryaKita API siap di http://localhost:%s (db ok, skema termigrasi)", port)
-	if err := http.ListenAndServe(":"+port, api.NewServer(pool)); err != nil {
+	uploadDir := os.Getenv("UPLOAD_DIR")
+	if uploadDir == "" {
+		uploadDir = "uploads"
+	}
+	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
+		log.Fatalf("folder upload: %v", err)
+	}
+
+	log.Printf("KaryaKita API siap di http://localhost:%s (db ok, skema termigrasi, upload → %s)", port, uploadDir)
+	if err := http.ListenAndServe(":"+port, api.NewServer(pool, uploadDir)); err != nil {
 		log.Fatal(err)
 	}
 }
