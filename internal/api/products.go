@@ -29,31 +29,43 @@ type Product struct {
 	ColorIds     []string `json:"colorIds"`
 	Tags         []string `json:"tags"`
 	Categories   []string `json:"categories"`
+	Active       bool     `json:"active"`
 }
 
 const productQuery = `
 	SELECT l.id, l.design_id, l.product_type_id, l.price, l.sold, l.rating, COALESCE(l.badge,''),
-	       pt.label || ' ' || d.title, d.uri, dr.name, dr.id, dr.avatar_uri, pt.label, d.tags,
+	       COALESCE(l.title_override, pt.label || ' ' || d.title), d.uri, dr.name, dr.id, dr.avatar_uri, pt.label, d.tags,
 	       (SELECT COALESCE(array_agg(size ORDER BY sort), '{}') FROM product_type_sizes WHERE product_type_id = pt.id),
-	       (SELECT COALESCE(array_agg(color_id ORDER BY sort), '{}') FROM product_type_colors WHERE product_type_id = pt.id),
-	       (SELECT COALESCE(array_agg(category_id), '{}') FROM design_categories WHERE design_id = d.id)
+	       CASE WHEN l.color_ids IS NOT NULL AND cardinality(l.color_ids) > 0 THEN l.color_ids
+	            ELSE (SELECT COALESCE(array_agg(color_id ORDER BY sort), '{}') FROM product_type_colors WHERE product_type_id = pt.id)
+	       END,
+	       (SELECT COALESCE(array_agg(category_id), '{}') FROM design_categories WHERE design_id = d.id),
+	       l.active
 	FROM listings l
 	JOIN designs d ON d.id = l.design_id
 	JOIN designers dr ON dr.id = d.designer_id
 	JOIN product_types pt ON pt.id = l.product_type_id
-	WHERE l.active`
+	WHERE true`
 
 func scanProduct(row pgx.Row) (Product, error) {
 	var p Product
 	err := row.Scan(&p.ID, &p.DesignID, &p.Type, &p.Price, &p.Sold, &p.Rating, &p.Badge,
 		&p.Title, &p.DesignURI, &p.DesignerName, &p.DesignerID, &p.DesignerAvatar, &p.TypeLabel, &p.Tags,
-		&p.Sizes, &p.ColorIds, &p.Categories)
+		&p.Sizes, &p.ColorIds, &p.Categories, &p.Active)
 	return p, err
 }
 
 func (s *Server) getProducts(w http.ResponseWriter, r *http.Request) {
 	query := productQuery
 	args := []any{}
+	// tanpa filter designer: katalog publik hanya listing aktif;
+	// dengan designer: semua listing miliknya (utk dashboard kelola produk)
+	if dsg := r.URL.Query().Get("designer"); dsg != "" {
+		args = append(args, dsg)
+		query += fmt.Sprintf(` AND dr.id = $%d`, len(args))
+	} else {
+		query += ` AND l.active`
+	}
 	if t := r.URL.Query().Get("type"); t != "" {
 		args = append(args, t)
 		query += fmt.Sprintf(` AND l.product_type_id = $%d`, len(args))
