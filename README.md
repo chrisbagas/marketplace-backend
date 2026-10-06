@@ -6,9 +6,11 @@ Backend marketplace print-on-demand KaryaKita. Frontend Next.js ada di repo terp
 ## Menjalankan
 
 ```bash
-docker compose up -d    # 1. Postgres 16 (butuh Docker Desktop jalan)
+docker compose up -d    # 1. Postgres 16 + Mailpit (butuh Docker Desktop jalan)
 go run ./cmd/api        # 2. API di http://localhost:8081
 ```
+
+Semua email dev (verifikasi, reset password) tertangkap di **Mailpit: http://localhost:8025**.
 
 Saat pertama kali start, API otomatis:
 1. membuat skema (25 tabel — lihat [DATABASE.md](DATABASE.md) + diagram ERD),
@@ -16,7 +18,7 @@ Saat pertama kali start, API otomatis:
 3. di luar produksi: memberi password ke akun demo (lihat di bawah).
 
 Konfigurasi lewat env var (lihat `.env.example`): `DATABASE_URL`, `PORT` (default 8081),
-`UPLOAD_DIR`, `APP_ENV`, `DEMO_PASSWORD`, `COOKIE_SECURE`, `GOOGLE_*`.
+`UPLOAD_DIR`, `APP_ENV`, `DEMO_PASSWORD`, `COOKIE_SECURE`, `APP_URL`, `SMTP_*`, `MAIL_FROM`, `GOOGLE_*`.
 
 ## Autentikasi
 
@@ -26,6 +28,15 @@ Konfigurasi lewat env var (lihat `.env.example`): `DATABASE_URL`, `PORT` (defaul
   Daftar sebagai kreator (`asCreator: true`) langsung membuat profil toko.
 - **Login Google** aktif bila `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URL`
   diisi. Akun Google ditautkan ke akun lama dengan email yang sama, atau dibuat baru (pelanggan).
+- **Verifikasi email**: daftar dengan password → email berisi link `{APP_URL}/verifikasi-email?token=…`
+  (berlaku 24 jam). Akun tetap bisa dipakai; **kreator wajib terverifikasi untuk mengajukan
+  desain**. Akun Google dan akun demo sudah terverifikasi.
+- **Reset password**: `/lupa-password` → email berisi link `{APP_URL}/reset-password?token=…`
+  (30 menit, sekali pakai). Berhasil = password baru, semua sesi lama dicabut, langsung masuk,
+  plus email pemberitahuan. Respons "lupa password" selalu sama agar tidak membocorkan email
+  mana yang terdaftar.
+- Token email disimpan seperti sesi: hanya sha256-nya (tabel `auth_tokens`); meminta link baru
+  membatalkan link lama.
 - Batas percobaan: login 10×/15 menit per akun & 30×/15 menit per IP; daftar 10×/jam per IP
   (di memori — pindahkan ke Redis bila API lebih dari satu replika).
 
@@ -52,6 +63,10 @@ peran salah → `403`.
 | `/api/auth/logout` | POST | publik | Hapus sesi |
 | `/api/auth/me` | GET | publik | `{user}` atau `{user: null}` |
 | `/api/auth/providers` | GET | publik | `{password, google}` — metode login yang aktif |
+| `/api/auth/verify-email` | POST | publik | `{token}` dari link email |
+| `/api/auth/verify-email/resend` | POST | login | Kirim ulang link verifikasi |
+| `/api/auth/password/forgot` | POST | publik | `{email}` → kirim link reset (respons selalu sama) |
+| `/api/auth/password/reset` | POST | publik | `{token, password}` → password baru + sesi baru |
 | `/api/auth/google/start`, `/callback` | GET | publik | Alur OAuth Google (redirect) |
 | `/api/products`, `/api/products/{id}`, `/api/categories` | GET | publik | Katalog |
 | `/api/orders` | POST | publik | Buat pesanan (guest boleh; bila login, tertaut ke akun) |
@@ -82,7 +97,9 @@ internal/db/
 internal/api/
   server.go            router + tabel akses, CORS, middleware metrik
   auth.go              signup/login/logout, sesi cookie, s.authed (cek peran)
+  auth_email.go        verifikasi email + lupa/reset password (token sekali pakai)
   google.go            login Google (OAuth code flow + userinfo)
+internal/mail/         pengirim SMTP (Mailpit di dev, penyedia di produksi) + template email
   orders.go            siklus pesanan + pembayaran + royalti
   designs.go           pengajuan & moderasi desain
   track.go             event perilaku + web vitals

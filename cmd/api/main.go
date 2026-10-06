@@ -9,6 +9,7 @@ import (
 
 	"karyakita/api/internal/api"
 	"karyakita/api/internal/db"
+	"karyakita/api/internal/mail"
 )
 
 func main() {
@@ -56,6 +57,8 @@ func main() {
 
 	authCfg := api.AuthConfig{
 		CookieSecure: production || os.Getenv("COOKIE_SECURE") == "true",
+		AppURL:       envOr("APP_URL", "http://localhost:3000"),
+		Mailer:       newMailer(production),
 		Google: api.GoogleConfig{
 			ClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 			ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
@@ -70,4 +73,34 @@ func main() {
 	if err := http.ListenAndServe(":"+port, api.NewServer(pool, uploadDir, authCfg)); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+// newMailer: SMTP_HOST diisi → kirim lewat SMTP. Di dev bawaannya Mailpit
+// (localhost:1025, lihat docker-compose.yml). Di produksi tanpa SMTP, email
+// tidak dikirim dan isinya (berisi token) tidak ditulis ke log.
+func newMailer(production bool) mail.Mailer {
+	host := os.Getenv("SMTP_HOST")
+	if host == "" && !production {
+		host = "localhost"
+	}
+	if host == "" {
+		log.Printf("PERINGATAN: SMTP_HOST kosong — email verifikasi & reset password tidak terkirim")
+		return mail.Log{ShowBody: false}
+	}
+	m := mail.SMTP{
+		Host:     host,
+		Port:     envOr("SMTP_PORT", "1025"),
+		Username: os.Getenv("SMTP_USERNAME"),
+		Password: os.Getenv("SMTP_PASSWORD"),
+		From:     envOr("MAIL_FROM", "KaryaKita <no-reply@karyakita.id>"),
+	}
+	log.Printf("email dikirim lewat SMTP %s:%s", m.Host, m.Port)
+	return m
 }

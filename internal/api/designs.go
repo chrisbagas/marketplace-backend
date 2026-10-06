@@ -122,6 +122,11 @@ func (s *Server) postDesign(w http.ResponseWriter, r *http.Request) {
 	// kreator selalu mengajukan atas nama profil tokonya sendiri;
 	// admin boleh mengisi nama kreator bebas (mis. untuk kurasi titipan)
 	u := userFrom(r)
+	// karya yang dijual atas nama kreator butuh kontak yang terbukti valid
+	if u.Role != "admin" && !u.EmailVerified {
+		errJSON(w, http.StatusForbidden, "Verifikasi email kamu dulu sebelum mengajukan desain — cek kotak masuk atau kirim ulang link dari banner di atas")
+		return
+	}
 	var designerID any
 	if u.Designer != nil {
 		designerID = u.Designer.ID

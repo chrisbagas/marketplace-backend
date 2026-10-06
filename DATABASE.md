@@ -3,11 +3,11 @@
 Database: **PostgreSQL 16** · skema penuh di [`internal/db/schema.sql`](internal/db/schema.sql)
 (dimigrasikan otomatis saat API pertama kali start, dicatat di `schema_migrations`).
 
-25 tabel dalam 5 kelompok:
+26 tabel dalam 5 kelompok:
 
 | Kelompok | Tabel |
 |---|---|
-| **Identitas** | `users` (profil + preferensi + kredensial), `sessions` (sesi login), `designers`, `user_designs` (desain custom pribadi — tanpa royalti) |
+| **Identitas** | `users` (profil + preferensi + kredensial), `sessions` (sesi login), `auth_tokens` (link verifikasi & reset password), `designers`, `user_designs` (desain custom pribadi — tanpa royalti) |
 | **Katalog** | `product_types`, `colors`, `product_type_colors`, `product_type_sizes`, `designs`, `listings`, `categories`, `design_categories` |
 | **Transaksi** | `orders`, `order_items`, `payments`, `order_events`, `reviews` (ulasan terverifikasi + moderasi) |
 | **Kreator** | `design_submissions` (terbit jadi listing saat disetujui), `royalties`, `payouts` |
@@ -21,6 +21,7 @@ erDiagram
     users ||--o{ orders : "pesanan (nullable, guest ok)"
     users ||--o{ user_designs : "desain custom pribadi"
     users ||--o{ sessions : "sesi login"
+    users ||--o{ auth_tokens : "link email"
     product_types ||--o{ user_designs : ""
     colors ||--o{ user_designs : ""
 
@@ -60,6 +61,13 @@ erDiagram
         bool email_verified
         timestamptz last_login_at "nullable"
         timestamptz created_at
+    }
+    auth_tokens {
+        text id PK "sha256(token)"
+        text user_id FK
+        auth_token_purpose purpose "verify_email | reset_password"
+        timestamptz expires_at "24 jam / 30 menit"
+        timestamptz used_at "NULL = belum dipakai"
     }
     sessions {
         text id PK "sha256(token) — token mentah hanya di cookie"

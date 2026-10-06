@@ -17,5 +17,16 @@ services:
       timeout: 3s
       retries: 20
 
+  # Kotak masuk email untuk dev: semua email (verifikasi, reset password)
+  # tertangkap di sini dan tidak pernah sampai ke penerima sungguhan.
+  # Buka http://localhost:8025 — API mengirim lewat SMTP localhost:1025.
+  mail:
+    image: axllent/mailpit:latest
+    container_name: karyakita-mail
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
 volumes:
   karyakita-pgdata:

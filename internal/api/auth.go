@@ -7,11 +7,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"fmt"
+	"log"
 	mrand "math/rand/v2"
 	"net"
 	"net/http"
-	"net/mail"
+	netmail "net/mail"
 	"regexp"
 	"strings"
 	"sync"
@@ -22,6 +22,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"karyakita/api/internal/db"
+	"karyakita/api/internal/mail"
 )
 
 // Autentikasi berbasis sesi: token acak di cookie HttpOnly, hanya sha256-nya
@@ -36,7 +37,9 @@ const (
 )
 
 type AuthConfig struct {
-	CookieSecure bool // true di produksi (HTTPS)
+	CookieSecure bool   // true di produksi (HTTPS)
+	AppURL       string // origin frontend untuk link di email, mis. http://localhost:3000
+	Mailer       mail.Mailer
 	Google       GoogleConfig
 }
 
@@ -52,14 +55,15 @@ type DesignerRef struct {
 
 // User adalah pengguna yang sedang login (bentuk respons /api/auth/me).
 type User struct {
-	ID           string       `json:"id"`
-	Username     string       `json:"username"`
-	Email        string       `json:"email"`
-	Name         string       `json:"name"`
-	Role         string       `json:"role"` // customer | designer | admin
-	HasPassword  bool         `json:"hasPassword"`
-	GoogleLinked bool         `json:"googleLinked"`
-	Designer     *DesignerRef `json:"designer,omitempty"`
+	ID            string       `json:"id"`
+	Username      string       `json:"username"`
+	Email         string       `json:"email"`
+	Name          string       `json:"name"`
+	Role          string       `json:"role"` // customer | designer | admin
+	EmailVerified bool         `json:"emailVerified"`
+	HasPassword   bool         `json:"hasPassword"`
+	GoogleLinked  bool         `json:"googleLinked"`
+	Designer      *DesignerRef `json:"designer,omitempty"`
 }
 
 // ---- sesi ---------------------------------------------------------------
@@ -101,13 +105,13 @@ func (s *Server) loadUser(ctx context.Context, where string, args ...any) (*User
 	var dHue, dFollowers *int
 	var dRating *float64
 	err := s.pool.QueryRow(ctx, `
-		SELECT u.id, u.username, u.email, u.name, u.role::text,
+		SELECT u.id, u.username, u.email, u.name, u.role::text, u.email_verified,
 		       u.password_hash IS NOT NULL, u.google_sub IS NOT NULL,
 		       d.id, d.name, d.city, d.hue, d.followers, d.rating::float8, d.avatar_uri
 		FROM users u
 		LEFT JOIN designers d ON d.user_id = u.id
 		`+where, args...).
-		Scan(&u.ID, &u.Username, &u.Email, &u.Name, &u.Role, &u.HasPassword, &u.GoogleLinked,
+		Scan(&u.ID, &u.Username, &u.Email, &u.Name, &u.Role, &u.EmailVerified, &u.HasPassword, &u.GoogleLinked,
 			&dID, &dName, &dCity, &dHue, &dFollowers, &dRating, &dAvatar)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -242,11 +246,8 @@ func (s *Server) postSignup(w http.ResponseWriter, r *http.Request) {
 	case !validEmail(email):
 		errJSON(w, http.StatusBadRequest, "Format email tidak valid")
 		return
-	case len(body.Password) < minPassword:
-		errJSON(w, http.StatusBadRequest, fmt.Sprintf("Password minimal %d karakter", minPassword))
-		return
-	case len(body.Password) > maxPassword:
-		errJSON(w, http.StatusBadRequest, fmt.Sprintf("Password maksimal %d karakter", maxPassword))
+	case passwordProblem(body.Password) != "":
+		errJSON(w, http.StatusBadRequest, passwordProblem(body.Password))
 		return
 	case len(name) > 80 || len(city) > 60:
 		errJSON(w, http.StatusBadRequest, "Nama atau kota terlalu panjang")
@@ -276,6 +277,10 @@ func (s *Server) postSignup(w http.ResponseWriter, r *http.Request) {
 		}
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	// akun tetap bisa dipakai; verifikasi hanya wajib untuk aksi kreator tertentu
+	if err := s.sendVerification(r.Context(), userID, email, name); err != nil {
+		log.Printf("email verifikasi untuk %s gagal dibuat: %v", userID, err)
 	}
 	s.respondWithSession(w, r, userID, http.StatusCreated)
 }
@@ -406,7 +411,7 @@ func validEmail(s string) bool {
 	if len(s) > 254 || !strings.Contains(s, "@") {
 		return false
 	}
-	addr, err := mail.ParseAddress(s)
+	addr, err := netmail.ParseAddress(s)
 	return err == nil && addr.Address == s
 }
 

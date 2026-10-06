@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"karyakita/api/internal/mail"
 )
 
 type Server struct {
@@ -19,6 +21,12 @@ type Server struct {
 }
 
 func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
+	if auth.Mailer == nil {
+		auth.Mailer = mail.Log{ShowBody: true}
+	}
+	if auth.AppURL == "" {
+		auth.AppURL = "http://localhost:3000"
+	}
 	s := &Server{pool: pool, mux: http.NewServeMux(), uploadDir: uploadDir, auth: auth, limiter: newRateLimiter()}
 
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -38,6 +46,10 @@ func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
 	s.route("POST /api/auth/signup", "/api/auth", s.postSignup)
 	s.route("POST /api/auth/login", "/api/auth", s.postLogin)
 	s.route("POST /api/auth/logout", "/api/auth", s.postLogout)
+	s.route("POST /api/auth/verify-email", "/api/auth", s.postVerifyEmail)
+	s.route("POST /api/auth/verify-email/resend", "/api/auth", s.authed(s.postResendVerification))
+	s.route("POST /api/auth/password/forgot", "/api/auth", s.postForgotPassword)
+	s.route("POST /api/auth/password/reset", "/api/auth", s.postResetPassword)
 	s.route("GET /api/auth/google/start", "/api/auth/google", s.googleStart)
 	s.route("GET /api/auth/google/callback", "/api/auth/google", s.googleCallback)
 
