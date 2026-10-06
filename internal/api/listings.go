@@ -25,18 +25,25 @@ func (s *Server) patchListing(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	var ptID string
+	var ptID, ownerID string
 	var basePrice int
 	err := s.pool.QueryRow(ctx, `
-		SELECT l.product_type_id, pt.base_price
-		FROM listings l JOIN product_types pt ON pt.id = l.product_type_id
-		WHERE l.id = $1`, id).Scan(&ptID, &basePrice)
+		SELECT l.product_type_id, pt.base_price, d.designer_id
+		FROM listings l
+		JOIN product_types pt ON pt.id = l.product_type_id
+		JOIN designs d ON d.id = l.design_id
+		WHERE l.id = $1`, id).Scan(&ptID, &basePrice, &ownerID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		errJSON(w, http.StatusNotFound, "Produk tidak ditemukan")
 		return
 	}
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// kreator hanya boleh mengubah listing miliknya; admin boleh semua
+	if u := userFrom(r); u.Role != "admin" && (u.Designer == nil || u.Designer.ID != ownerID) {
+		errJSON(w, http.StatusForbidden, "Ini bukan produk milikmu")
 		return
 	}
 

@@ -18,7 +18,7 @@ func main() {
 	}
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
+		port = "8081" // frontend (next.config.ts) mem-proxy ke port ini
 	}
 
 	ctx := context.Background()
@@ -34,6 +34,17 @@ func main() {
 	if err := db.SeedIfEmpty(ctx, pool); err != nil {
 		log.Fatalf("seed gagal: %v", err)
 	}
+	production := os.Getenv("APP_ENV") == "production"
+	if !production {
+		// akun demo (admin / raka / demo) bisa langsung dipakai login di dev
+		demoPass := os.Getenv("DEMO_PASSWORD")
+		if demoPass == "" {
+			demoPass = "karyakita123"
+		}
+		if err := db.EnsureDemoPasswords(ctx, pool, demoPass); err != nil {
+			log.Fatalf("password akun demo: %v", err)
+		}
+	}
 
 	uploadDir := os.Getenv("UPLOAD_DIR")
 	if uploadDir == "" {
@@ -43,8 +54,20 @@ func main() {
 		log.Fatalf("folder upload: %v", err)
 	}
 
+	authCfg := api.AuthConfig{
+		CookieSecure: production || os.Getenv("COOKIE_SECURE") == "true",
+		Google: api.GoogleConfig{
+			ClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
+			ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
+			RedirectURL:  os.Getenv("GOOGLE_REDIRECT_URL"),
+		},
+	}
+	if authCfg.Google.Enabled() {
+		log.Printf("login Google aktif (redirect → %s)", authCfg.Google.RedirectURL)
+	}
+
 	log.Printf("KaryaKita API siap di http://localhost:%s (db ok, skema termigrasi, upload → %s)", port, uploadDir)
-	if err := http.ListenAndServe(":"+port, api.NewServer(pool, uploadDir)); err != nil {
+	if err := http.ListenAndServe(":"+port, api.NewServer(pool, uploadDir, authCfg)); err != nil {
 		log.Fatal(err)
 	}
 }

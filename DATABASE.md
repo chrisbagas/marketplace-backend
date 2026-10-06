@@ -3,11 +3,11 @@
 Database: **PostgreSQL 16** · skema penuh di [`internal/db/schema.sql`](internal/db/schema.sql)
 (dimigrasikan otomatis saat API pertama kali start, dicatat di `schema_migrations`).
 
-24 tabel dalam 5 kelompok:
+25 tabel dalam 5 kelompok:
 
 | Kelompok | Tabel |
 |---|---|
-| **Identitas** | `users` (profil + preferensi), `designers`, `user_designs` (desain custom pribadi — tanpa royalti) |
+| **Identitas** | `users` (profil + preferensi + kredensial), `sessions` (sesi login), `designers`, `user_designs` (desain custom pribadi — tanpa royalti) |
 | **Katalog** | `product_types`, `colors`, `product_type_colors`, `product_type_sizes`, `designs`, `listings`, `categories`, `design_categories` |
 | **Transaksi** | `orders`, `order_items`, `payments`, `order_events`, `reviews` (ulasan terverifikasi + moderasi) |
 | **Kreator** | `design_submissions` (terbit jadi listing saat disetujui), `royalties`, `payouts` |
@@ -20,6 +20,7 @@ erDiagram
     users ||--o| designers : "profil kreator"
     users ||--o{ orders : "pesanan (nullable, guest ok)"
     users ||--o{ user_designs : "desain custom pribadi"
+    users ||--o{ sessions : "sesi login"
     product_types ||--o{ user_designs : ""
     colors ||--o{ user_designs : ""
 
@@ -50,10 +51,23 @@ erDiagram
 
     users {
         text id PK
+        text username UK "unik tanpa beda huruf besar/kecil"
         text email UK
         text name
         user_role role "customer | designer | admin"
+        text password_hash "bcrypt; NULL = akun Google saja"
+        text google_sub UK "nullable"
+        bool email_verified
+        timestamptz last_login_at "nullable"
         timestamptz created_at
+    }
+    sessions {
+        text id PK "sha256(token) — token mentah hanya di cookie"
+        text user_id FK
+        timestamptz expires_at "30 hari"
+        timestamptz last_seen_at
+        text user_agent
+        text ip
     }
     designers {
         text id PK
@@ -261,7 +275,13 @@ erDiagram
   kali tidak menggandakan royalti (`ON CONFLICT (order_item_id) DO NOTHING`).
 - **Royalti dibukukan saat pembayaran**, dihitung dari `designers.royalty_share` (default 12%),
   satu baris per `order_item` — auditable, tinggal `SUM` untuk saldo kreator.
-- **Guest checkout.** `orders.user_id` nullable; saat auth ditambahkan, kolom sudah siap.
+- **Guest checkout.** `orders.user_id` nullable; pesanan dari pengguna yang login otomatis tertaut.
+- **Sesi di database, bukan JWT.** Cookie berisi token acak; tabel `sessions` hanya menyimpan
+  hash-nya, jadi kebocoran database tidak membocorkan sesi aktif, dan logout/cabut akses
+  berlaku seketika (cukup hapus barisnya).
+- **Satu akun, dua cara masuk.** `password_hash` dan `google_sub` sama-sama nullable: akun
+  password bisa ditautkan ke Google (email sama), akun Google tidak wajib punya password.
+  Keunikan username & email memakai indeks `lower(...)`.
 - **Enum PostgreSQL** untuk semua status — nilai tak valid ditolak di level database.
 - **`day_stats`** = agregat harian (di-seed untuk demo, di produksi diisi job harian dari
   `track_events`); statistik hari berjalan digabung live dari `track_events` di `GET /api/stats`.

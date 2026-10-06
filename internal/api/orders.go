@@ -99,10 +99,14 @@ func (s *Server) postOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 
+	var userID any // NULL = guest checkout
+	if u := userFrom(r); u != nil {
+		userID = u.ID
+	}
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO orders (id, cust_name, cust_email, cust_phone, cust_address, cust_city, subtotal, courier, shipping_cost, total)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-		id, body.Customer.Name, body.Customer.Email, body.Customer.Phone, body.Customer.Address, body.Customer.City,
+		`INSERT INTO orders (id, user_id, cust_name, cust_email, cust_phone, cust_address, cust_city, subtotal, courier, shipping_cost, total)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		id, userID, body.Customer.Name, body.Customer.Email, body.Customer.Phone, body.Customer.Address, body.Customer.City,
 		subtotal, body.Shipping.Courier, body.Shipping.Cost, total); err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return

@@ -63,9 +63,9 @@ var printAreas = map[string][2]float64{
 	"kaos": {30, 40}, "hoodie": {28, 30}, "mug": {9, 8.5}, "totebag": {25, 30},
 }
 
-// avatarURI: foto profil bawaan — inisial di atas warna khas kreator.
+// AvatarURI: foto profil bawaan — inisial di atas warna khas kreator.
 // Sama dengan backfill di migrations/003 dan lib/avatar.ts di frontend.
-func avatarURI(hue int, name string) string {
+func AvatarURI(hue int, name string) string {
 	initials := ""
 	for _, part := range strings.Fields(name) {
 		initials += strings.ToUpper(part[:1])
@@ -102,16 +102,16 @@ func SeedIfEmpty(ctx context.Context, pool *pgxpool.Pool) error {
 	now := time.Now()
 	day := 24 * time.Hour
 
-	// --- users (contoh peran; belum ada login di prototipe) ---
-	users := [][3]string{
-		{"u-admin", "admin@karyakita.id", "admin"},
-		{"u-raka", "raka@karyakita.id", "designer"},
-		{"u-demo", "demo@karyakita.id", "customer"},
+	// --- users (akun demo per peran; password di-set oleh EnsureDemoPasswords) ---
+	users := [][4]string{
+		{"u-admin", "admin", "admin@karyakita.id", "admin"},
+		{"u-raka", "raka", "raka@karyakita.id", "designer"},
+		{"u-demo", "demo", "demo@karyakita.id", "customer"},
 	}
 	names := map[string]string{"u-admin": "Admin KaryaKita", "u-raka": "Raka Wijaya", "u-demo": "Pelanggan Demo"}
 	for _, u := range users {
-		if _, err := tx.Exec(ctx, `INSERT INTO users (id, email, name, role) VALUES ($1,$2,$3,$4)`,
-			u[0], u[1], names[u[0]], u[2]); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO users (id, username, email, name, role, email_verified) VALUES ($1,$2,$3,$4,$5,true)`,
+			u[0], u[1], u[2], names[u[0]], u[3]); err != nil {
 			return err
 		}
 	}
@@ -147,7 +147,7 @@ func SeedIfEmpty(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO designers (id, user_id, name, city, bio, hue, followers, rating, avatar_uri) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-			d.ID, userID, d.Name, d.City, d.Bio, d.Hue, d.Followers, d.Rating, avatarURI(d.Hue, d.Name)); err != nil {
+			d.ID, userID, d.Name, d.City, d.Bio, d.Hue, d.Followers, d.Rating, AvatarURI(d.Hue, d.Name)); err != nil {
 			return err
 		}
 	}
