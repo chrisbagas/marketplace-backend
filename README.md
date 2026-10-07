@@ -74,7 +74,7 @@ peran salah → `403`.
 | `/api/orders` | GET | admin | Daftar pesanan `?status=&q=&limit=&offset=` → `{orders, total}` |
 | `/api/orders/mine` | GET | login | Riwayat pesanan akun ini |
 | `/api/orders/{id}` | GET | pemilik, admin | Detail (akun lain → 404) |
-| `/api/orders/{id}` | PATCH | pemilik, admin | `{action:"pay"}` (≈ webhook gateway); `{action:"advance"}` hanya admin |
+| `/api/orders/{id}` | PATCH | pemilik, admin | `{action:"pay"}` (≈ webhook gateway) — pemilik/admin. Khusus admin: `advance` (dibayar→produksi, dikirim→selesai), `ship` `{courier, trackingNumber}` (produksi→dikirim, **resi wajib**), `update-shipment` (koreksi resi) |
 | `/api/designer/orders` | GET | kreator, admin | Item pesanan yang memuat produk kreator + royalti (tanpa alamat/kontak pembeli) |
 | `/api/vouchers` | GET / POST | admin | Daftar (+ pemakaian) / buat voucher |
 | `/api/vouchers/{code}` | PATCH | admin | `{active}` |
@@ -128,3 +128,11 @@ internal/mail/         pengirim SMTP (Mailpit di dev, penyedia di produksi) + te
   (tidak diam-diam ditagih harga penuh). Diskon ditanggung platform: royalti tetap dari harga item.
 - Voucher demo: `KARYAKITA10` (10%, maks Rp50.000, min Rp100.000), `HEMAT25` (Rp25.000, min
   Rp150.000, 1× per akun), `GRATISONGKIR` (ongkir s.d. Rp20.000).
+
+## Pengiriman
+
+Pesanan **tidak bisa** berstatus `dikirim`/`selesai` tanpa nama kurir + nomor resi: `advance` dari
+`produksi` ditolak (400), admin harus memakai `ship` dengan resi (6–30 huruf/angka, dirapikan jadi
+huruf besar tanpa spasi). Dijaga tiga lapis — form admin, API, dan CHECK constraint
+`orders_shipped_has_tracking` di database. Satu resi tidak boleh dipakai dua pesanan pada kurir yang
+sama (409). Pembeli melihat kurir & resi di halaman pesanannya.

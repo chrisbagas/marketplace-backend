@@ -144,6 +144,9 @@ erDiagram
         text voucher_code FK "nullable"
         text cust_postal
         text notes "catatan untuk kurir"
+        text shipped_courier "nullable — kurir yang mengirim"
+        text tracking_number "nullable — resi, unik per kurir"
+        timestamptz shipped_at "nullable"
         int total
         order_status status "menunggu-pembayaran → selesai"
         timestamptz created_at
@@ -303,6 +306,9 @@ erDiagram
   `user_id` tetap nullable untuk pesanan guest lama.
 - **Harga dihitung server.** `order_items.unit_price`, ongkir, dan `discount` berasal dari database
   saat checkout, bukan dari browser. `total = subtotal + shipping_cost − discount`.
+- **Resi wajib sebelum dikirim.** CHECK `orders_shipped_has_tracking`: status `dikirim`/`selesai`
+  harus punya `shipped_courier`, `tracking_number`, `shipped_at`. Indeks unik
+  `(lower(shipped_courier), tracking_number)` mencegah satu resi dipakai dua pesanan.
 - **Voucher** dihitung pemakaiannya dari `orders.voucher_code` (kuota total & per akun), dikunci
   `FOR UPDATE` saat pesanan dibuat agar kuota tidak terlampaui. Diskon ditanggung platform —
   royalti tetap dari harga item.

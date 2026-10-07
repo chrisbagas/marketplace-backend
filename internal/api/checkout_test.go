@@ -315,7 +315,11 @@ func TestOrderOwnershipAndAdminDesignerViews(t *testing.T) {
 	}
 
 	// ulasan hanya oleh pemilik pesanan
-	f.pool.Exec(context.Background(), `UPDATE orders SET status='selesai' WHERE id=$1`, id)
+	if _, err := f.pool.Exec(context.Background(),
+		`UPDATE orders SET status='selesai', shipped_courier='JNE REG', tracking_number=$2, shipped_at=now() WHERE id=$1`,
+		id, "TES"+strings.ToUpper(f.tag)+"001"); err != nil {
+		t.Fatal(err)
+	}
 	review := map[string]any{"orderId": id, "listingId": f.listing, "rating": 5}
 	if rec, _ := call(f.s, "POST", "/api/reviews", review, f.other); rec.Code != http.StatusNotFound {
 		t.Errorf("akun lain mengulas pesanan orang: %d, want 404", rec.Code)
@@ -343,5 +347,80 @@ func TestAdminVoucherCRUD(t *testing.T) {
 	}
 	if rec, out := call(f.s, "PATCH", "/api/vouchers/"+code, map[string]any{"active": false}, f.admin); rec.Code != http.StatusOK || out["voucher"].(map[string]any)["active"] != false {
 		t.Errorf("nonaktifkan voucher: %d %v", rec.Code, out)
+	}
+}
+
+func TestShippingRequiresCourierTracking(t *testing.T) {
+	f := setupCheckout(t)
+	ctx := context.Background()
+	newPaidOrder := func() string {
+		_, out := f.order(t, f.buyer, "", f.line("M", 1))
+		id := out["order"].(map[string]any)["id"].(string)
+		call(f.s, "PATCH", "/api/orders/"+id, map[string]string{"action": "pay", "method": "QRIS"}, f.buyer)
+		if rec, out := call(f.s, "PATCH", "/api/orders/"+id, map[string]string{"action": "advance"}, f.admin); rec.Code != http.StatusOK || out["order"].(map[string]any)["status"] != "produksi" {
+			t.Fatalf("ke produksi: %d %v", rec.Code, out)
+		}
+		return id
+	}
+	id := newPaidOrder()
+	act := func(cookie *http.Cookie, body map[string]string) (int, map[string]any) {
+		rec, out := call(f.s, "PATCH", "/api/orders/"+id, body, cookie)
+		return rec.Code, out
+	}
+
+	// tidak bisa lompat ke "dikirim" tanpa data kurir
+	if code, out := act(f.admin, map[string]string{"action": "advance"}); code != http.StatusBadRequest {
+		t.Fatalf("advance dari produksi tanpa resi: %d %v, want 400", code, out)
+	}
+	for name, body := range map[string]map[string]string{
+		"tanpa resi":  {"action": "ship", "courier": "JNE REG"},
+		"tanpa kurir": {"action": "ship", "trackingNumber": "JNE0123456789"},
+		"resi pendek": {"action": "ship", "courier": "JNE REG", "trackingNumber": "AB1"},
+		"resi aneh":   {"action": "ship", "courier": "JNE REG", "trackingNumber": "<script>123"},
+	} {
+		if code, _ := act(f.admin, body); code != http.StatusBadRequest {
+			t.Errorf("%s: %d, want 400", name, code)
+		}
+	}
+	ship := map[string]string{"action": "ship", "courier": "JNE REG", "trackingNumber": " jne 0123 4567 89" + strings.ToUpper(f.tag)}
+	if code, _ := act(f.buyer, ship); code != http.StatusForbidden {
+		t.Errorf("pembeli mengisi resi: %d, want 403", code)
+	}
+	code, out := act(f.admin, ship)
+	if code != http.StatusOK {
+		t.Fatalf("kirim dengan resi: %d %v", code, out)
+	}
+	o := out["order"].(map[string]any)
+	sh, _ := o["shipment"].(map[string]any)
+	wantResi := "JNE0123456789" + strings.ToUpper(f.tag)
+	if o["status"] != "dikirim" || sh == nil || sh["trackingNumber"] != wantResi || sh["courier"] != "JNE REG" || num(sh["shippedAt"]) == 0 {
+		t.Fatalf("data pengiriman: status=%v shipment=%v", o["status"], sh)
+	}
+	// pembeli melihat resi di pesanannya
+	if _, out := call(f.s, "GET", "/api/orders/"+id, nil, f.buyer); out["order"].(map[string]any)["shipment"] == nil {
+		t.Error("pembeli tidak melihat resi")
+	}
+	// resi yang sama untuk pesanan lain (kurir sama) ditolak
+	id2 := newPaidOrder()
+	if rec, _ := call(f.s, "PATCH", "/api/orders/"+id2, ship, f.admin); rec.Code != http.StatusConflict {
+		t.Errorf("resi kembar: %d, want 409", rec.Code)
+	}
+	// koreksi resi hanya saat dikirim
+	fix := map[string]string{"action": "update-shipment", "courier": "SiCepat REG", "trackingNumber": "SCP" + strings.ToUpper(f.tag) + "777"}
+	if rec, _ := call(f.s, "PATCH", "/api/orders/"+id2, fix, f.admin); rec.Code != http.StatusBadRequest {
+		t.Errorf("koreksi resi saat masih produksi: %d, want 400", rec.Code)
+	}
+	if code, out := act(f.admin, fix); code != http.StatusOK || out["order"].(map[string]any)["shipment"].(map[string]any)["courier"] != "SiCepat REG" {
+		t.Errorf("koreksi resi: %d %v", code, out)
+	}
+	if code, out := act(f.admin, map[string]string{"action": "advance"}); code != http.StatusOK || out["order"].(map[string]any)["status"] != "selesai" {
+		t.Errorf("dikirim → selesai: %d %v", code, out)
+	}
+	if code, _ := act(f.admin, map[string]string{"action": "advance"}); code != http.StatusBadRequest {
+		t.Errorf("advance dari selesai: %d, want 400", code)
+	}
+	// database ikut menjaga: status dikirim tanpa resi ditolak CHECK constraint
+	if _, err := f.pool.Exec(ctx, `UPDATE orders SET status='dikirim' WHERE id=$1`, id2); err == nil {
+		t.Error("database menerima status dikirim tanpa resi")
 	}
 }
