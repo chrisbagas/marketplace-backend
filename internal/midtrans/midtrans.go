@@ -167,6 +167,18 @@ func (c *Client) Status(ctx context.Context, orderID string) (*Notification, err
 	return &n, nil
 }
 
+// CheckCredentials memastikan Server Key diterima Midtrans (di lingkungan yang
+// dipilih) dengan meminta status transaksi yang pasti tidak ada: kunci yang
+// benar dijawab "404 transaksi tidak ada", kunci salah/lingkungan keliru dijawab 401.
+// Galat jaringan dikembalikan apa adanya (bukan bukti kunci salah).
+func (c *Client) CheckCredentials(ctx context.Context) error {
+	_, err := c.Status(ctx, "kk-cek-kunci-tidak-ada")
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	return err
+}
+
 // AmountRupiah mengubah "382000.00" → 382000.
 func (n *Notification) AmountRupiah() (int, error) {
 	f, err := strconv.ParseFloat(n.GrossAmount, 64)

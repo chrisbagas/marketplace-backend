@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -138,12 +139,6 @@ func newPayments(production bool) api.PaymentsConfig {
 		log.Fatal("MIDTRANS_CLIENT_KEY wajib diisi bersama MIDTRANS_SERVER_KEY")
 	}
 	prod := os.Getenv("MIDTRANS_ENV") == "production"
-	if prod && !strings.HasPrefix(serverKey, "Mid-server-") {
-		log.Fatal("MIDTRANS_ENV=production tetapi server key bukan kunci produksi (Mid-server-...)")
-	}
-	if !prod && strings.HasPrefix(serverKey, "Mid-server-") {
-		log.Fatal("kunci produksi terdeteksi tetapi MIDTRANS_ENV bukan production — pakai kunci sandbox (SB-Mid-server-...)")
-	}
 	var enabled []string
 	for _, p := range strings.Split(os.Getenv("MIDTRANS_ENABLED_PAYMENTS"), ",") {
 		if p = strings.TrimSpace(p); p != "" {
@@ -154,6 +149,20 @@ func newPayments(production bool) api.PaymentsConfig {
 	if prod {
 		env = "PRODUKSI"
 	}
+	client := midtrans.New(serverKey, clientKey, prod)
+	// Tanya Midtrans langsung apakah kunci ini diterima di lingkungan yang dipilih
+	// (lebih andal daripada menebak dari awalan kunci). Kunci ditolak → berhenti.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := client.CheckCredentials(ctx); err != nil {
+		var apiErr *midtrans.APIError
+		if errors.As(err, &apiErr) && (apiErr.Status == 401 || apiErr.Status == 403) {
+			log.Fatalf("Midtrans (%s) menolak MIDTRANS_SERVER_KEY — kunci salah, atau kunci sandbox/produksi tertukar dengan MIDTRANS_ENV=%s", env, os.Getenv("MIDTRANS_ENV"))
+		}
+		log.Printf("PERINGATAN: kunci Midtrans belum bisa diverifikasi (%v) — lanjut, akan dicoba lagi saat pembayaran", err)
+	} else {
+		log.Printf("pembayaran: kunci Midtrans %s diterima", env)
+	}
 	log.Printf("pembayaran: Midtrans %s (webhook: POST /api/payments/midtrans/notification)", env)
-	return api.PaymentsConfig{Provider: "midtrans", Midtrans: midtrans.New(serverKey, clientKey, prod), EnabledPayments: enabled}
+	return api.PaymentsConfig{Provider: "midtrans", Midtrans: client, EnabledPayments: enabled}
 }
