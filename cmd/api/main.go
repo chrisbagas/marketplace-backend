@@ -9,10 +9,17 @@ import (
 
 	"karyakita/api/internal/api"
 	"karyakita/api/internal/db"
+	"karyakita/api/internal/envfile"
 	"karyakita/api/internal/mail"
 )
 
 func main() {
+	// dev: baca backend/.env bila ada (tidak menimpa variabel yang sudah di-set)
+	if n, err := envfile.Load(".env"); err != nil {
+		log.Fatalf("baca .env: %v", err)
+	} else if n > 0 {
+		log.Printf(".env dimuat (%d variabel)", n)
+	}
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		dsn = "postgres://karyakita:karyakita_dev@localhost:5432/karyakita"
