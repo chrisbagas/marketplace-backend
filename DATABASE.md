@@ -3,13 +3,13 @@
 Database: **PostgreSQL 16** · skema penuh di [`internal/db/schema.sql`](internal/db/schema.sql)
 (dimigrasikan otomatis saat API pertama kali start, dicatat di `schema_migrations`).
 
-27 tabel dalam 5 kelompok:
+28 tabel dalam 5 kelompok:
 
 | Kelompok | Tabel |
 |---|---|
 | **Identitas** | `users` (profil + preferensi + kredensial), `sessions` (sesi login), `auth_tokens` (link verifikasi & reset password), `designers`, `user_designs` (desain custom pribadi — tanpa royalti) |
 | **Katalog** | `product_types`, `colors`, `product_type_colors`, `product_type_sizes`, `designs`, `listings`, `categories`, `design_categories` |
-| **Transaksi** | `orders`, `order_items`, `payments`, `order_events`, `reviews` (ulasan terverifikasi + moderasi), `vouchers` |
+| **Transaksi** | `orders`, `order_items`, `payments`, `order_events`, `reviews` (ulasan terverifikasi + moderasi), `vouchers`, `payment_notifications` (jejak webhook/sync gateway) |
 | **Kreator** | `design_submissions` (terbit jadi listing saat disetujui), `royalties`, `payouts` |
 | **Analitik** | `track_events`, `web_vitals`, `api_metrics`, `search_terms`, `day_stats` |
 
@@ -149,8 +149,9 @@ erDiagram
         timestamptz shipped_at "nullable"
         timestamptz delivered_at "nullable — laporan kurir paket tiba"
         timestamptz completed_at "nullable — dikonfirmasi pembeli / otomatis"
+        timestamptz cancelled_at "nullable — dibatalkan karena tidak dibayar"
         int total
-        order_status status "menunggu-pembayaran → dibayar → produksi → dikirim → tiba → selesai"
+        order_status status "menunggu-pembayaran → dibayar → produksi → dikirim → tiba → selesai (atau dibatalkan)"
         timestamptz created_at
     }
     order_items {
@@ -308,6 +309,11 @@ erDiagram
   `user_id` tetap nullable untuk pesanan guest lama.
 - **Harga dihitung server.** `order_items.unit_price`, ongkir, dan `discount` berasal dari database
   saat checkout, bukan dari browser. `total = subtotal + shipping_cost − discount`.
+- **Pembayaran diputuskan gateway.** Lunas hanya setelah Status API Midtrans menyatakan settlement
+  (webhook hanya pemicu). Kolom `payments.gateway_order_id` (`<no. pesanan>-<percobaan>`, unik),
+  `snap_token`, `payment_type`. `payment_notifications` mencatat setiap notifikasi/cek (sumber, hasil,
+  tanda tangan valid atau tidak). Pesanan tak dibayar 24 jam → `dibatalkan`; kuota voucher tidak
+  menghitung pesanan dibatalkan.
 - **Selesai hanya oleh pembeli.** `tiba` (wajib `delivered_at`, CHECK `orders_delivered_has_time`)
   → `selesai` lewat konfirmasi pembeli atau otomatis 48 jam setelah tiba (`completed_at`).
 - **Resi wajib sebelum dikirim.** CHECK `orders_shipped_has_tracking`: status `dikirim`/`selesai`

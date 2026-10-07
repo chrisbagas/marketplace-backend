@@ -73,7 +73,9 @@ func call(s *Server, method, path string, body any, cookies ...*http.Cookie) (*h
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "192.0.2.1:1234"
 	for _, c := range cookies {
-		req.AddCookie(c)
+		if c != nil { // nil = tidak login
+			req.AddCookie(c)
+		}
 	}
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)

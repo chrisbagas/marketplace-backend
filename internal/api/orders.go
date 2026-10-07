@@ -44,10 +44,12 @@ type Shipping struct {
 }
 
 type Payment struct {
-	Method string `json:"method"`
-	Status string `json:"status"`
-	Ref    string `json:"ref"`
-	PaidAt *int64 `json:"paidAt,omitempty"`
+	Method    string `json:"method"`
+	Status    string `json:"status"`
+	Ref       string `json:"ref"`
+	PaidAt    *int64 `json:"paidAt,omitempty"`
+	ExpiresAt int64  `json:"expiresAt,omitempty"` // batas bayar (hanya saat menunggu pembayaran)
+	Gateway   string `json:"gateway,omitempty"`
 }
 
 // Shipment: data dari kurir, wajib ada sebelum pesanan berstatus "dikirim".
@@ -352,7 +354,19 @@ func (s *Server) patchOrder(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch body.Action {
 	case "pay":
-		err = s.payOrder(ctx, order.ID, truncate(body.Method, 40))
+		// Hanya mode mock yang membolehkan pembeli melunasi sendiri. Dengan gateway
+		// sungguhan, status lunas datang dari Midtrans (webhook / sync); admin tetap
+		// boleh menandai lunas manual (mis. transfer bank yang dicek manual).
+		if !isAdmin && s.paymentProvider() != "mock" {
+			errJSON(w, http.StatusForbidden, "Pembayaran diverifikasi otomatis oleh gateway — gunakan tombol Bayar")
+			return
+		}
+		method := truncate(body.Method, 40)
+		if isAdmin && s.paymentProvider() != "mock" {
+			err = s.payOrderVia(ctx, order.ID, "Manual (admin)", "", "manual")
+		} else {
+			err = s.payOrder(ctx, order.ID, method)
+		}
 	case "confirm":
 		// hanya pemilik pesanan — admin tidak bisa menyelesaikan atas nama pembeli
 		if order.UserID != userFrom(r).ID {
@@ -426,7 +440,7 @@ func (s *Server) payOrder(ctx context.Context, id, method string) error {
 	if err := tx.QueryRow(ctx, `SELECT status FROM payments WHERE order_id=$1 FOR UPDATE`, id).Scan(&payStatus); err != nil {
 		return err // pgx.ErrNoRows bila pesanan tak ada
 	}
-	if payStatus != "pending" {
+	if payStatus == "paid" {
 		return nil // sudah dibayar — idempoten seperti webhook sungguhan
 	}
 
@@ -447,9 +461,13 @@ func (s *Server) payOrder(ctx context.Context, id, method string) error {
 		return err
 	}
 	// counter terjual + royalti kreator (share dari designers.royalty_share)
+	// dijumlahkan per listing dulu: produk yang sama bisa muncul di beberapa baris
+	// (ukuran berbeda), dan UPDATE ... FROM hanya menerapkan SATU baris yang cocok.
 	if _, err := tx.Exec(ctx, `
-		UPDATE listings l SET sold = l.sold + oi.qty
-		FROM order_items oi WHERE oi.order_id = $1 AND oi.listing_id = l.id`, id); err != nil {
+		UPDATE listings l SET sold = l.sold + q.qty
+		FROM (SELECT listing_id, sum(qty)::int AS qty FROM order_items
+		      WHERE order_id = $1 AND listing_id IS NOT NULL GROUP BY listing_id) q
+		WHERE q.listing_id = l.id`, id); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -579,6 +597,12 @@ func (s *Server) RunOrderJobs(ctx context.Context, every time.Duration) {
 		} else if n > 0 {
 			log.Printf("selesai otomatis: %d pesanan", n)
 		}
+		c, err := s.CancelUnpaidOrders(ctx)
+		if err != nil {
+			log.Printf("batalkan pesanan tak dibayar: %v", err)
+		} else if c > 0 {
+			log.Printf("pesanan dibatalkan (tak dibayar): %d", c)
+		}
 	}
 	run()
 	t := time.NewTicker(every)
@@ -704,7 +728,7 @@ func (s *Server) getDesignerOrders(w http.ResponseWriter, r *http.Request) {
 		JOIN designs d    ON d.id = l.design_id
 		JOIN designers dr ON dr.id = d.designer_id
 		LEFT JOIN royalties ry ON ry.order_item_id = oi.id
-		WHERE d.designer_id = $1
+		WHERE d.designer_id = $1 AND o.status::text <> 'dibatalkan'
 		ORDER BY o.created_at DESC, oi.id
 		LIMIT 200`, designerID)
 	if err != nil {
@@ -811,6 +835,9 @@ func (s *Server) loadOrdersPage(ctx context.Context, where string, args []any, l
 			&o.Payment.Method, &o.Payment.Status, &o.Payment.Ref, &o.Payment.PaidAt,
 			&ship.Courier, &ship.TrackingNumber, &ship.ShippedAt, &ship.DeliveredAt, &o.CompletedAt); err != nil {
 			return nil, err
+		}
+		if o.Status == "menunggu-pembayaran" && o.Payment.Status != "paid" {
+			o.Payment.ExpiresAt = o.CreatedAt + UnpaidOrderTTL.Milliseconds()
 		}
 		if o.Status == "tiba" && ship.DeliveredAt > 0 {
 			o.AutoCompleteAt = ship.DeliveredAt + AutoCompleteAfter.Milliseconds()

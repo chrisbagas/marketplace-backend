@@ -262,7 +262,7 @@ func evalVoucher(ctx context.Context, q querier, user *User, code string, subtot
 	// kuota dihitung dari pesanan yang sudah dibuat (dibayar atau belum)
 	if v.usageLimit != nil {
 		var used int
-		if err := q.QueryRow(ctx, `SELECT count(*) FROM orders WHERE voucher_code = $1`, code).Scan(&used); err != nil {
+		if err := q.QueryRow(ctx, `SELECT count(*) FROM orders WHERE voucher_code = $1 AND status::text <> 'dibatalkan'`, code).Scan(&used); err != nil {
 			return 0, nil, err
 		}
 		if used >= *v.usageLimit {
@@ -271,7 +271,7 @@ func evalVoucher(ctx context.Context, q querier, user *User, code string, subtot
 	}
 	if user != nil {
 		var mine int
-		if err := q.QueryRow(ctx, `SELECT count(*) FROM orders WHERE voucher_code = $1 AND user_id = $2`, code, user.ID).Scan(&mine); err != nil {
+		if err := q.QueryRow(ctx, `SELECT count(*) FROM orders WHERE voucher_code = $1 AND user_id = $2 AND status::text <> 'dibatalkan'`, code, user.ID).Scan(&mine); err != nil {
 			return 0, nil, err
 		}
 		if mine >= v.perUser {
@@ -352,8 +352,8 @@ const voucherCols = `
 	SELECT v.code, v.description, v.kind::text, v.value, v.min_subtotal, v.max_discount,
 	       (extract(epoch FROM v.starts_at)*1000)::bigint, (extract(epoch FROM v.ends_at)*1000)::bigint,
 	       v.usage_limit, v.per_user_limit, v.active,
-	       (SELECT count(*) FROM orders o WHERE o.voucher_code = v.code),
-	       (SELECT COALESCE(sum(discount), 0) FROM orders o WHERE o.voucher_code = v.code)
+	       (SELECT count(*) FROM orders o WHERE o.voucher_code = v.code AND o.status::text <> 'dibatalkan'),
+	       (SELECT COALESCE(sum(discount), 0) FROM orders o WHERE o.voucher_code = v.code AND o.status::text <> 'dibatalkan')
 	FROM vouchers v`
 
 func scanVoucher(row pgx.Row) (Voucher, error) {

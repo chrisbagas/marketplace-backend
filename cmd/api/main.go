@@ -5,12 +5,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"karyakita/api/internal/api"
 	"karyakita/api/internal/db"
 	"karyakita/api/internal/envfile"
 	"karyakita/api/internal/mail"
+	"karyakita/api/internal/midtrans"
 )
 
 func main() {
@@ -78,6 +80,7 @@ func main() {
 
 	log.Printf("KaryaKita API siap di http://localhost:%s (db ok, skema termigrasi, upload → %s)", port, uploadDir)
 	srv := api.NewServer(pool, uploadDir, authCfg)
+	srv.SetPayments(newPayments(production))
 	// pesanan "tiba" selesai otomatis 2 hari setelah paket sampai (dicek tiap 10 menit)
 	go srv.RunOrderJobs(ctx, 10*time.Minute)
 	if err := http.ListenAndServe(":"+port, srv); err != nil {
@@ -113,4 +116,44 @@ func newMailer(production bool) mail.Mailer {
 	}
 	log.Printf("email dikirim lewat SMTP %s:%s", m.Host, m.Port)
 	return m
+}
+
+// newPayments memilih penyedia pembayaran:
+//
+//	MIDTRANS_SERVER_KEY diisi → Midtrans (MIDTRANS_ENV=production untuk produksi, selain itu sandbox)
+//	kosong, bukan produksi    → mock (pembayaran tiruan untuk dev)
+//	kosong, produksi          → none (pembayaran dinonaktifkan; admin bisa tandai lunas manual)
+func newPayments(production bool) api.PaymentsConfig {
+	serverKey := os.Getenv("MIDTRANS_SERVER_KEY")
+	if serverKey == "" {
+		if production {
+			log.Printf("PERINGATAN: MIDTRANS_SERVER_KEY kosong di produksi — pembayaran online nonaktif")
+			return api.PaymentsConfig{Provider: "none"}
+		}
+		log.Printf("pembayaran: MOCK (isi MIDTRANS_SERVER_KEY & MIDTRANS_CLIENT_KEY untuk Midtrans sandbox)")
+		return api.PaymentsConfig{Provider: "mock"}
+	}
+	clientKey := os.Getenv("MIDTRANS_CLIENT_KEY")
+	if clientKey == "" {
+		log.Fatal("MIDTRANS_CLIENT_KEY wajib diisi bersama MIDTRANS_SERVER_KEY")
+	}
+	prod := os.Getenv("MIDTRANS_ENV") == "production"
+	if prod && !strings.HasPrefix(serverKey, "Mid-server-") {
+		log.Fatal("MIDTRANS_ENV=production tetapi server key bukan kunci produksi (Mid-server-...)")
+	}
+	if !prod && strings.HasPrefix(serverKey, "Mid-server-") {
+		log.Fatal("kunci produksi terdeteksi tetapi MIDTRANS_ENV bukan production — pakai kunci sandbox (SB-Mid-server-...)")
+	}
+	var enabled []string
+	for _, p := range strings.Split(os.Getenv("MIDTRANS_ENABLED_PAYMENTS"), ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			enabled = append(enabled, p)
+		}
+	}
+	env := "sandbox"
+	if prod {
+		env = "PRODUKSI"
+	}
+	log.Printf("pembayaran: Midtrans %s (webhook: POST /api/payments/midtrans/notification)", env)
+	return api.PaymentsConfig{Provider: "midtrans", Midtrans: midtrans.New(serverKey, clientKey, prod), EnabledPayments: enabled}
 }
