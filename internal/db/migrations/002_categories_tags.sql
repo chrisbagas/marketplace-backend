@@ -34,8 +34,12 @@ INSERT INTO categories (id, label, emoji, sort) VALUES
   ('musik',     'Musik',     '🎵', 11),
   ('gaming',    'Gaming',    '🎮', 12);
 
--- pemetaan desain seed ke kategori
-INSERT INTO design_categories (design_id, category_id) VALUES
+-- pemetaan desain seed ke kategori (backfill untuk DB lama). Di DB baru
+-- desainnya belum ada saat migrasi jalan — seeder (seed.go: seedDesignCategories)
+-- yang mengisinya, jadi baris untuk desain yang belum ada dilewati.
+INSERT INTO design_categories (design_id, category_id)
+SELECT v.design_id, v.category_id
+FROM (VALUES
   ('anak-senja', 'senja'), ('anak-senja', 'tipografi'),
   ('kopi-dulu', 'kopi'), ('kopi-dulu', 'tipografi'),
   ('kawung-modern', 'batik'),
@@ -43,4 +47,6 @@ INSERT INTO design_categories (design_id, category_id) VALUES
   ('ombak-nusantara', 'laut'), ('ombak-nusantara', 'alam'),
   ('jaga-laut', 'laut'), ('jaga-laut', 'alam'),
   ('rendang-love', 'kuliner'), ('rendang-love', 'tipografi'),
-  ('tropis', 'alam');
+  ('tropis', 'alam')
+) AS v(design_id, category_id)
+WHERE EXISTS (SELECT 1 FROM designs d WHERE d.id = v.design_id);
