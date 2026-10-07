@@ -74,7 +74,7 @@ peran salah → `403`.
 | `/api/orders` | GET | admin | Daftar pesanan `?status=&q=&limit=&offset=` → `{orders, total}` |
 | `/api/orders/mine` | GET | login | Riwayat pesanan akun ini |
 | `/api/orders/{id}` | GET | pemilik, admin | Detail (akun lain → 404) |
-| `/api/orders/{id}` | PATCH | pemilik, admin | `{action:"pay"}` (≈ webhook gateway) — pemilik/admin. Khusus admin: `advance` (dibayar→produksi, dikirim→selesai), `ship` `{courier, trackingNumber}` (produksi→dikirim, **resi wajib**), `update-shipment` (koreksi resi) |
+| `/api/orders/{id}` | PATCH | pemilik, admin | `{action:"pay"}` (≈ webhook gateway) — pemilik/admin. Khusus admin: `advance` (dibayar→produksi), `ship` `{courier, trackingNumber}` (produksi→dikirim, **resi wajib**), `update-shipment` (koreksi resi), `delivered` (dikirim→tiba, laporan kurir). Khusus **pembeli**: `confirm` (tiba→selesai) |
 | `/api/designer/orders` | GET | kreator, admin | Item pesanan yang memuat produk kreator + royalti (tanpa alamat/kontak pembeli) |
 | `/api/vouchers` | GET / POST | admin | Daftar (+ pemakaian) / buat voucher |
 | `/api/vouchers/{code}` | PATCH | admin | `{active}` |
@@ -136,3 +136,18 @@ Pesanan **tidak bisa** berstatus `dikirim`/`selesai` tanpa nama kurir + nomor re
 huruf besar tanpa spasi). Dijaga tiga lapis — form admin, API, dan CHECK constraint
 `orders_shipped_has_tracking` di database. Satu resi tidak boleh dipakai dua pesanan pada kurir yang
 sama (409). Pembeli melihat kurir & resi di halaman pesanannya.
+
+## Alur status pesanan
+
+```
+menunggu-pembayaran → dibayar → produksi → dikirim → tiba → selesai
+        pay (pembeli)   advance    ship +resi   delivered   confirm (pembeli)
+                        (admin)    (admin)      (kurir/admin)  atau OTOMATIS 2 hari setelah tiba
+```
+
+- **Admin tidak bisa menyelesaikan pesanan.** `tiba` hanya setelah laporan kurir bahwa paket sampai
+  (prototipe: admin mencatatnya dari pelacakan kurir; integrasi kurir — webhook Biteship/KiriminAja —
+  nanti memanggil `markDelivered` yang sama).
+- `selesai` hanya lewat tombol **Pesanan diterima** oleh pemilik pesanan, atau otomatis oleh job
+  `RunOrderJobs` (dicek saat API start dan tiap 10 menit) bila `delivered_at` lewat
+  `AutoCompleteAfter` (48 jam). Database menolak status `tiba`/`selesai` tanpa `delivered_at`.

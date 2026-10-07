@@ -147,8 +147,10 @@ erDiagram
         text shipped_courier "nullable — kurir yang mengirim"
         text tracking_number "nullable — resi, unik per kurir"
         timestamptz shipped_at "nullable"
+        timestamptz delivered_at "nullable — laporan kurir paket tiba"
+        timestamptz completed_at "nullable — dikonfirmasi pembeli / otomatis"
         int total
-        order_status status "menunggu-pembayaran → selesai"
+        order_status status "menunggu-pembayaran → dibayar → produksi → dikirim → tiba → selesai"
         timestamptz created_at
     }
     order_items {
@@ -306,6 +308,8 @@ erDiagram
   `user_id` tetap nullable untuk pesanan guest lama.
 - **Harga dihitung server.** `order_items.unit_price`, ongkir, dan `discount` berasal dari database
   saat checkout, bukan dari browser. `total = subtotal + shipping_cost − discount`.
+- **Selesai hanya oleh pembeli.** `tiba` (wajib `delivered_at`, CHECK `orders_delivered_has_time`)
+  → `selesai` lewat konfirmasi pembeli atau otomatis 48 jam setelah tiba (`completed_at`).
 - **Resi wajib sebelum dikirim.** CHECK `orders_shipped_has_tracking`: status `dikirim`/`selesai`
   harus punya `shipped_courier`, `tracking_number`, `shipped_at`. Indeks unik
   `(lower(shipped_courier), tracking_number)` mencegah satu resi dipakai dua pesanan.

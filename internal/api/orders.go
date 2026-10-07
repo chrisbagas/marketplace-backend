@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand/v2"
 	"net/http"
 	"regexp"
@@ -54,6 +55,7 @@ type Shipment struct {
 	Courier        string `json:"courier"`
 	TrackingNumber string `json:"trackingNumber"`
 	ShippedAt      int64  `json:"shippedAt"`
+	DeliveredAt    int64  `json:"deliveredAt,omitempty"` // laporan kurir: paket sampai
 }
 
 type TimelineEntry struct {
@@ -62,22 +64,25 @@ type TimelineEntry struct {
 }
 
 type Order struct {
-	ID          string          `json:"id"`
-	CreatedAt   int64           `json:"createdAt"`
-	UserID      string          `json:"userId,omitempty"`
-	Username    string          `json:"username,omitempty"` // akun pemesan (kosong = guest lama)
-	Customer    Customer        `json:"customer"`
-	Notes       string          `json:"notes,omitempty"`
-	Items       []CartLine      `json:"items"`
-	Subtotal    int             `json:"subtotal"`
-	Shipping    Shipping        `json:"shipping"`
-	Discount    int             `json:"discount"`
-	VoucherCode string          `json:"voucherCode,omitempty"`
-	Total       int             `json:"total"`
-	Payment     Payment         `json:"payment"`
-	Shipment    *Shipment       `json:"shipment,omitempty"`
-	Status      string          `json:"status"`
-	Timeline    []TimelineEntry `json:"timeline"`
+	ID          string     `json:"id"`
+	CreatedAt   int64      `json:"createdAt"`
+	UserID      string     `json:"userId,omitempty"`
+	Username    string     `json:"username,omitempty"` // akun pemesan (kosong = guest lama)
+	Customer    Customer   `json:"customer"`
+	Notes       string     `json:"notes,omitempty"`
+	Items       []CartLine `json:"items"`
+	Subtotal    int        `json:"subtotal"`
+	Shipping    Shipping   `json:"shipping"`
+	Discount    int        `json:"discount"`
+	VoucherCode string     `json:"voucherCode,omitempty"`
+	Total       int        `json:"total"`
+	Payment     Payment    `json:"payment"`
+	Shipment    *Shipment  `json:"shipment,omitempty"`
+	// status "tiba": kapan pesanan otomatis selesai bila pembeli tidak konfirmasi
+	AutoCompleteAt int64           `json:"autoCompleteAt,omitempty"`
+	CompletedAt    int64           `json:"completedAt,omitempty"`
+	Status         string          `json:"status"`
+	Timeline       []TimelineEntry `json:"timeline"`
 }
 
 var phoneRe = regexp.MustCompile(`^\+?[0-9]{8,15}$`)
@@ -322,7 +327,9 @@ func (s *Server) getOrder(w http.ResponseWriter, r *http.Request) {
 // PATCH /api/orders/{id}
 //
 //	{action:"pay", method}                       — pemilik / admin (pengganti webhook gateway di prototipe)
-//	{action:"advance"}                           — admin: dibayar → produksi, dikirim → selesai
+//	{action:"advance"}                           — admin: dibayar → produksi
+//	{action:"delivered"}                         — admin: dikirim → tiba (laporan kurir paket sampai)
+//	{action:"confirm"}                           — PEMBELI saja: tiba → selesai ("Pesanan diterima")
 //	{action:"ship", courier, trackingNumber}     — admin: produksi → dikirim (resi WAJIB)
 //	{action:"update-shipment", courier, trackingNumber} — admin: koreksi resi saat masih dikirim
 func (s *Server) patchOrder(w http.ResponseWriter, r *http.Request) {
@@ -346,7 +353,14 @@ func (s *Server) patchOrder(w http.ResponseWriter, r *http.Request) {
 	switch body.Action {
 	case "pay":
 		err = s.payOrder(ctx, order.ID, truncate(body.Method, 40))
-	case "advance", "ship", "update-shipment":
+	case "confirm":
+		// hanya pemilik pesanan — admin tidak bisa menyelesaikan atas nama pembeli
+		if order.UserID != userFrom(r).ID {
+			errJSON(w, http.StatusForbidden, "Hanya pembeli yang bisa mengonfirmasi pesanan diterima")
+			return
+		}
+		err = s.confirmReceived(ctx, order.ID)
+	case "advance", "ship", "update-shipment", "delivered":
 		if !isAdmin {
 			errJSON(w, http.StatusForbidden, "Hanya admin yang bisa mengubah status pesanan")
 			return
@@ -354,6 +368,8 @@ func (s *Server) patchOrder(w http.ResponseWriter, r *http.Request) {
 		switch body.Action {
 		case "advance":
 			err = s.advanceOrder(ctx, order.ID)
+		case "delivered":
+			err = s.markDelivered(ctx, order.ID)
 		case "ship":
 			err = s.shipOrder(ctx, order.ID, body.Courier, body.TrackingNumber, false)
 		default:
@@ -450,11 +466,12 @@ func (s *Server) payOrder(ctx context.Context, id, method string) error {
 	return tx.Commit(ctx)
 }
 
-// Langkah status yang tidak butuh data tambahan. produksi → dikirim sengaja
-// tidak ada di sini: itu lewat shipOrder, karena wajib ada nomor resi.
+// Langkah status yang boleh dimajukan admin tanpa data tambahan. Sisanya punya
+// jalur sendiri: produksi → dikirim lewat shipOrder (wajib resi), dikirim →
+// tiba lewat markDelivered (laporan kurir), tiba → selesai hanya oleh pembeli
+// (confirmReceived) atau otomatis (AutoCompleteOrders).
 var nextStatus = map[string][2]string{
 	"dibayar": {"produksi", "Masuk antrean produksi (cetak DTG)"},
-	"dikirim": {"selesai", "Pesanan diterima pelanggan"},
 }
 
 func (s *Server) advanceOrder(ctx context.Context, id string) error {
@@ -468,8 +485,13 @@ func (s *Server) advanceOrder(ctx context.Context, id string) error {
 	if err := tx.QueryRow(ctx, `SELECT status FROM orders WHERE id=$1 FOR UPDATE`, id).Scan(&status); err != nil {
 		return err
 	}
-	if status == "produksi" {
+	switch status {
+	case "produksi":
 		return checkoutError("Isi kurir dan nomor resi untuk menandai pesanan dikirim")
+	case "dikirim":
+		return checkoutError("Tunggu laporan kurir bahwa paket sudah tiba")
+	case "tiba":
+		return checkoutError("Pesanan diselesaikan oleh pembeli, atau otomatis setelah batas waktu")
 	}
 	step, ok := nextStatus[status]
 	if !ok {
@@ -482,6 +504,103 @@ func (s *Server) advanceOrder(ctx context.Context, id string) error {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// AutoCompleteAfter: pesanan berstatus "tiba" otomatis selesai setelah selang
+// ini bila pembeli tidak menekan "Pesanan diterima".
+const AutoCompleteAfter = 48 * time.Hour
+
+// markDelivered: dikirim → tiba. Dipicu laporan kurir bahwa paket sampai —
+// di prototipe dicatat admin dari pelacakan kurir; integrasi kurir
+// (webhook Biteship/KiriminAja, dsb.) nanti memanggil fungsi yang sama.
+func (s *Server) markDelivered(ctx context.Context, id string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var status, courier string
+	if err := tx.QueryRow(ctx, `SELECT status, COALESCE(shipped_courier,'') FROM orders WHERE id=$1 FOR UPDATE`, id).Scan(&status, &courier); err != nil {
+		return err
+	}
+	if status != "dikirim" {
+		return checkoutError("Hanya pesanan yang sedang dikirim yang bisa ditandai tiba")
+	}
+	if _, err := tx.Exec(ctx, `UPDATE orders SET status='tiba', delivered_at=now() WHERE id=$1`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO order_events (order_id, label) VALUES ($1,$2)`, id,
+		fmt.Sprintf("Paket tiba di tujuan (laporan kurir %s) — menunggu konfirmasi pembeli", courier)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// confirmReceived: tiba → selesai oleh pembeli.
+func (s *Server) confirmReceived(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx, `
+		WITH done AS (
+			UPDATE orders SET status='selesai', completed_at=now()
+			WHERE id=$1 AND status='tiba' RETURNING id
+		)
+		INSERT INTO order_events (order_id, label) SELECT id, 'Pesanan diterima — dikonfirmasi pembeli' FROM done`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return checkoutError("Pesanan bisa dikonfirmasi setelah kurir melaporkan paket tiba")
+	}
+	return nil
+}
+
+// AutoCompleteOrders menyelesaikan pesanan "tiba" yang sudah lewat batas
+// konfirmasi. Mengembalikan jumlah pesanan yang diselesaikan.
+func (s *Server) AutoCompleteOrders(ctx context.Context, after time.Duration) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		WITH done AS (
+			UPDATE orders SET status='selesai', completed_at=now()
+			WHERE status='tiba' AND delivered_at <= now() - make_interval(secs => $1)
+			RETURNING id
+		)
+		INSERT INTO order_events (order_id, label) SELECT id, $2 FROM done`,
+		after.Seconds(), "Selesai otomatis — "+humanDuration(after)+" setelah paket tiba tanpa konfirmasi")
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// RunOrderJobs menjalankan AutoCompleteOrders secara berkala sampai ctx selesai.
+func (s *Server) RunOrderJobs(ctx context.Context, every time.Duration) {
+	run := func() {
+		n, err := s.AutoCompleteOrders(ctx, AutoCompleteAfter)
+		if err != nil {
+			log.Printf("selesai otomatis: %v", err)
+		} else if n > 0 {
+			log.Printf("selesai otomatis: %d pesanan", n)
+		}
+	}
+	run()
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
+		}
+	}
+}
+
+func humanDuration(d time.Duration) string {
+	if d >= 24*time.Hour && d%(24*time.Hour) == 0 {
+		return fmt.Sprintf("%d hari", int(d/(24*time.Hour)))
+	}
+	if d >= time.Hour && d%time.Hour == 0 {
+		return fmt.Sprintf("%d jam", int(d/time.Hour))
+	}
+	return d.String()
 }
 
 var trackingRe = regexp.MustCompile(`^[A-Z0-9][A-Z0-9-]{5,29}$`)
@@ -663,7 +782,9 @@ func (s *Server) loadOrdersPage(ctx context.Context, where string, args []any, l
 		       p.method, p.status, p.ref,
 		       (extract(epoch FROM p.paid_at)*1000)::bigint,
 		       COALESCE(o.shipped_courier,''), COALESCE(o.tracking_number,''),
-		       COALESCE((extract(epoch FROM o.shipped_at)*1000)::bigint, 0)
+		       COALESCE((extract(epoch FROM o.shipped_at)*1000)::bigint, 0),
+		       COALESCE((extract(epoch FROM o.delivered_at)*1000)::bigint, 0),
+		       COALESCE((extract(epoch FROM o.completed_at)*1000)::bigint, 0)
 		FROM orders o
 		JOIN payments p ON p.order_id = o.id
 		LEFT JOIN users u ON u.id = o.user_id
@@ -688,8 +809,11 @@ func (s *Server) loadOrdersPage(ctx context.Context, where string, args []any, l
 			&o.Customer.Postal, &o.Notes,
 			&o.Subtotal, &o.Shipping.Courier, &o.Shipping.Cost, &o.Discount, &o.VoucherCode, &o.Total, &o.Status,
 			&o.Payment.Method, &o.Payment.Status, &o.Payment.Ref, &o.Payment.PaidAt,
-			&ship.Courier, &ship.TrackingNumber, &ship.ShippedAt); err != nil {
+			&ship.Courier, &ship.TrackingNumber, &ship.ShippedAt, &ship.DeliveredAt, &o.CompletedAt); err != nil {
 			return nil, err
+		}
+		if o.Status == "tiba" && ship.DeliveredAt > 0 {
+			o.AutoCompleteAt = ship.DeliveredAt + AutoCompleteAfter.Milliseconds()
 		}
 		if ship.TrackingNumber != "" {
 			sh := ship

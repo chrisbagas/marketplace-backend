@@ -315,7 +315,7 @@ func seedOrders(ctx context.Context, tx pgx.Tx, cat *seedCatalog, rng *rand.Rand
 		{"Siti Nurhaliza", "Medan"}, {"Bayu Nugroho", "Malang"}, {"Laras Sekar", "Depok"}, {"Eko Prabowo", "Bekasi"},
 	}
 	methods := []string{"QRIS", "GoPay", "OVO", "VA BCA", "VA Mandiri", "DANA"}
-	statuses := []string{"dibayar", "produksi", "produksi", "dikirim", "dikirim", "selesai"}
+	statuses := []string{"dibayar", "produksi", "produksi", "dikirim", "tiba", "selesai"}
 
 	designByID := map[string]string{}
 	designerByDesign := map[string]string{}
@@ -338,18 +338,29 @@ func seedOrders(ctx context.Context, tx pgx.Tx, cat *seedCatalog, rng *rand.Rand
 		title := pt.Label + " " + designByID[l.DesignID]
 		// pesanan yang sudah dikirim wajib punya resi (CHECK orders_shipped_has_tracking)
 		shipment := [3]any{nil, nil, nil}
-		if status == "dikirim" || status == "selesai" {
+		if status == "dikirim" || status == "tiba" || status == "selesai" {
 			shipment = [3]any{fmt.Sprintf("JNE%010d", rng.IntN(1_000_000_000)), "JNE REG", createdAt.Add(day)}
+		}
+		// tiba/selesai wajib punya waktu tiba (CHECK orders_delivered_has_time)
+		var deliveredAt, completedAt any
+		if status == "tiba" || status == "selesai" {
+			deliveredAt = createdAt.Add(2 * day)
+		}
+		if status == "tiba" {
+			deliveredAt = now.Add(-6 * time.Hour) // masih dalam batas konfirmasi pembeli
+		}
+		if status == "selesai" {
+			completedAt = createdAt.Add(3 * day)
 		}
 
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO orders (id, cust_name, cust_email, cust_phone, cust_address, cust_city, subtotal, courier, shipping_cost, total, status, created_at,
-			                     tracking_number, shipped_courier, shipped_at)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT (id) DO NOTHING`,
+			                     tracking_number, shipped_courier, shipped_at, delivered_at, completed_at)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT (id) DO NOTHING`,
 			id, c[0], fmt.Sprintf("%s@mail.com", c[0][:4]), fmt.Sprintf("08%010d", rng.IntN(1_000_000_000)),
 			fmt.Sprintf("Jl. Merdeka No. %d", 1+rng.IntN(99)), c[1],
 			subtotal, "JNE REG", shipCost, subtotal+shipCost, status, createdAt,
-			shipment[0], shipment[1], shipment[2]); err != nil {
+			shipment[0], shipment[1], shipment[2], deliveredAt, completedAt); err != nil {
 			return err
 		}
 

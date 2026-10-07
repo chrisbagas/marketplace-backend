@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -316,7 +317,7 @@ func TestOrderOwnershipAndAdminDesignerViews(t *testing.T) {
 
 	// ulasan hanya oleh pemilik pesanan
 	if _, err := f.pool.Exec(context.Background(),
-		`UPDATE orders SET status='selesai', shipped_courier='JNE REG', tracking_number=$2, shipped_at=now() WHERE id=$1`,
+		`UPDATE orders SET status='selesai', shipped_courier='JNE REG', tracking_number=$2, shipped_at=now(), delivered_at=now() WHERE id=$1`,
 		id, "TES"+strings.ToUpper(f.tag)+"001"); err != nil {
 		t.Fatal(err)
 	}
@@ -413,14 +414,78 @@ func TestShippingRequiresCourierTracking(t *testing.T) {
 	if code, out := act(f.admin, fix); code != http.StatusOK || out["order"].(map[string]any)["shipment"].(map[string]any)["courier"] != "SiCepat REG" {
 		t.Errorf("koreksi resi: %d %v", code, out)
 	}
-	if code, out := act(f.admin, map[string]string{"action": "advance"}); code != http.StatusOK || out["order"].(map[string]any)["status"] != "selesai" {
-		t.Errorf("dikirim → selesai: %d %v", code, out)
-	}
+	// admin tidak bisa melompat ke selesai; pembeli belum bisa konfirmasi sebelum paket tiba
 	if code, _ := act(f.admin, map[string]string{"action": "advance"}); code != http.StatusBadRequest {
-		t.Errorf("advance dari selesai: %d, want 400", code)
+		t.Errorf("advance dari dikirim: %d, want 400", code)
+	}
+	if code, _ := act(f.buyer, map[string]string{"action": "confirm"}); code != http.StatusBadRequest {
+		t.Errorf("konfirmasi sebelum tiba: %d, want 400", code)
+	}
+	// laporan kurir (admin) → tiba, lengkap dengan batas konfirmasi
+	if code, _ := act(f.buyer, map[string]string{"action": "delivered"}); code != http.StatusForbidden {
+		t.Errorf("pembeli menandai tiba: %d, want 403", code)
+	}
+	code, out = act(f.admin, map[string]string{"action": "delivered"})
+	o = out["order"].(map[string]any)
+	if code != http.StatusOK || o["status"] != "tiba" || num(o["autoCompleteAt"]) == 0 {
+		t.Fatalf("tandai tiba: %d status=%v autoCompleteAt=%v", code, o["status"], o["autoCompleteAt"])
+	}
+	if got, want := num(o["autoCompleteAt"])-num(o["shipment"].(map[string]any)["deliveredAt"]), int(AutoCompleteAfter.Milliseconds()); got != want {
+		t.Errorf("batas konfirmasi %d ms setelah tiba, want %d", got, want)
+	}
+	// hanya pembeli yang menyelesaikan — admin & akun lain tidak bisa
+	if code, _ := act(f.admin, map[string]string{"action": "advance"}); code != http.StatusBadRequest {
+		t.Errorf("admin advance dari tiba: %d, want 400", code)
+	}
+	if code, _ := act(f.admin, map[string]string{"action": "confirm"}); code != http.StatusForbidden {
+		t.Errorf("admin konfirmasi atas nama pembeli: %d, want 403", code)
+	}
+	if code, _ := act(f.other, map[string]string{"action": "confirm"}); code != http.StatusNotFound {
+		t.Errorf("akun lain konfirmasi: %d, want 404", code)
+	}
+	if code, out := act(f.buyer, map[string]string{"action": "confirm"}); code != http.StatusOK || out["order"].(map[string]any)["status"] != "selesai" || num(out["order"].(map[string]any)["completedAt"]) == 0 {
+		t.Errorf("pembeli konfirmasi diterima: %d %v", code, out)
+	}
+	if code, _ := act(f.buyer, map[string]string{"action": "confirm"}); code != http.StatusBadRequest {
+		t.Errorf("konfirmasi dua kali: %d, want 400", code)
 	}
 	// database ikut menjaga: status dikirim tanpa resi ditolak CHECK constraint
 	if _, err := f.pool.Exec(ctx, `UPDATE orders SET status='dikirim' WHERE id=$1`, id2); err == nil {
 		t.Error("database menerima status dikirim tanpa resi")
+	}
+}
+
+func TestAutoCompleteAfterDelivery(t *testing.T) {
+	f := setupCheckout(t)
+	ctx := context.Background()
+	mk := func(deliveredAgo time.Duration) string {
+		_, out := f.order(t, f.buyer, "", f.line("M", 1))
+		id := out["order"].(map[string]any)["id"].(string)
+		if _, err := f.pool.Exec(ctx, `UPDATE orders SET status='tiba', shipped_courier='JNE REG', tracking_number=$2,
+			shipped_at=now() - interval '3 days', delivered_at=now() - make_interval(secs => $3) WHERE id=$1`,
+			id, "AUTO"+strings.ToUpper(f.tag)+id[len(id)-4:], deliveredAgo.Seconds()); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	overdue := mk(AutoCompleteAfter + time.Hour)
+	fresh := mk(time.Hour)
+
+	if _, err := f.s.AutoCompleteOrders(ctx, AutoCompleteAfter); err != nil {
+		t.Fatal(err)
+	}
+	status := func(id string) (st string, label string) {
+		f.pool.QueryRow(ctx, `SELECT o.status::text, (SELECT label FROM order_events WHERE order_id=o.id ORDER BY id DESC LIMIT 1) FROM orders o WHERE o.id=$1`, id).Scan(&st, &label)
+		return
+	}
+	if st, label := status(overdue); st != "selesai" || !strings.Contains(label, "otomatis") {
+		t.Errorf("lewat batas: status=%s event=%q, want selesai + event otomatis", st, label)
+	}
+	if st, _ := status(fresh); st != "tiba" {
+		t.Errorf("masih dalam batas: status=%s, want tiba", st)
+	}
+	// database ikut menjaga: tiba tanpa waktu tiba ditolak
+	if _, err := f.pool.Exec(ctx, `UPDATE orders SET delivered_at=NULL WHERE id=$1`, fresh); err == nil {
+		t.Error("database menerima status tiba tanpa delivered_at")
 	}
 }
