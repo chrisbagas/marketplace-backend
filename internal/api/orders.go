@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -30,6 +33,7 @@ type Customer struct {
 	Phone   string `json:"phone"`
 	Address string `json:"address"`
 	City    string `json:"city"`
+	Postal  string `json:"postal"`
 }
 
 type Shipping struct {
@@ -50,46 +54,80 @@ type TimelineEntry struct {
 }
 
 type Order struct {
-	ID        string          `json:"id"`
-	CreatedAt int64           `json:"createdAt"`
-	Customer  Customer        `json:"customer"`
-	Items     []CartLine      `json:"items"`
-	Subtotal  int             `json:"subtotal"`
-	Shipping  Shipping        `json:"shipping"`
-	Total     int             `json:"total"`
-	Payment   Payment         `json:"payment"`
-	Status    string          `json:"status"`
-	Timeline  []TimelineEntry `json:"timeline"`
+	ID          string          `json:"id"`
+	CreatedAt   int64           `json:"createdAt"`
+	UserID      string          `json:"userId,omitempty"`
+	Username    string          `json:"username,omitempty"` // akun pemesan (kosong = guest lama)
+	Customer    Customer        `json:"customer"`
+	Notes       string          `json:"notes,omitempty"`
+	Items       []CartLine      `json:"items"`
+	Subtotal    int             `json:"subtotal"`
+	Shipping    Shipping        `json:"shipping"`
+	Discount    int             `json:"discount"`
+	VoucherCode string          `json:"voucherCode,omitempty"`
+	Total       int             `json:"total"`
+	Payment     Payment         `json:"payment"`
+	Status      string          `json:"status"`
+	Timeline    []TimelineEntry `json:"timeline"`
 }
 
+var phoneRe = regexp.MustCompile(`^\+?[0-9]{8,15}$`)
+
+// validCustomer merapikan & memvalidasi data pengiriman dari form checkout.
+func validCustomer(c *Customer, fallbackEmail string) error {
+	trim := func(s *string, max int) { *s = truncate(strings.TrimSpace(*s), max) }
+	trim(&c.Name, 80)
+	trim(&c.Address, 300)
+	trim(&c.City, 60)
+	trim(&c.Postal, 10)
+	c.Email = strings.ToLower(strings.TrimSpace(c.Email))
+	c.Phone = strings.NewReplacer(" ", "", "-", "", ".", "", "(", "", ")", "").Replace(strings.TrimSpace(c.Phone))
+	if c.Email == "" {
+		c.Email = fallbackEmail
+	}
+	switch {
+	case c.Name == "":
+		return checkoutError("Nama penerima wajib diisi")
+	case !phoneRe.MatchString(c.Phone):
+		return checkoutError("Nomor WhatsApp tidak valid (8–15 digit)")
+	case len(c.Address) < 10:
+		return checkoutError("Alamat lengkap wajib diisi (jalan, nomor, RT/RW)")
+	case c.City == "":
+		return checkoutError("Kota / kabupaten wajib diisi")
+	case c.Postal != "" && !regexp.MustCompile(`^[0-9]{5}$`).MatchString(c.Postal):
+		return checkoutError("Kode pos harus 5 digit")
+	case c.Email != "" && !validEmail(c.Email):
+		return checkoutError("Format email tidak valid")
+	}
+	return nil
+}
+
+// POST /api/orders (login) — membuat pesanan dari keranjang. Harga, ongkir,
+// dan voucher dihitung ulang di server lewat quoteOrder.
 func (s *Server) postOrder(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Customer Customer   `json:"customer"`
-		Items    []CartLine `json:"items"`
-		Shipping Shipping   `json:"shipping"`
-		Method   string     `json:"method"`
-		Session  string     `json:"session"`
+		Customer    Customer   `json:"customer"`
+		Notes       string     `json:"notes"`
+		Items       []CartLine `json:"items"`
+		Courier     string     `json:"courier"`
+		Voucher     string     `json:"voucher"`
+		SaveProfile bool       `json:"saveProfile"`
+		Session     string     `json:"session"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		errJSON(w, http.StatusBadRequest, "Bad request")
 		return
 	}
-	if body.Customer.Name == "" || len(body.Items) == 0 || body.Shipping.Courier == "" || body.Method == "" {
-		errJSON(w, http.StatusBadRequest, "Data pesanan tidak lengkap")
+	u := userFrom(r)
+	if err := validCustomer(&body.Customer, u.Email); err != nil {
+		errJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
-
-	subtotal := 0
-	for _, it := range body.Items {
-		if it.Qty <= 0 || it.Price < 0 {
-			errJSON(w, http.StatusBadRequest, "Item pesanan tidak valid")
-			return
-		}
-		subtotal += it.Price * it.Qty
+	if _, ok := courierByID(body.Courier); !ok {
+		errJSON(w, http.StatusBadRequest, "Pilih kurir pengiriman")
+		return
 	}
-	total := subtotal + body.Shipping.Cost
-	now := time.Now()
-	id := fmt.Sprintf("KK-%s-%d", now.Format("060102"), 1000+rand.IntN(9000))
+	notes := truncate(strings.TrimSpace(body.Notes), 300)
 
 	ctx := r.Context()
 	tx, err := s.pool.Begin(ctx)
@@ -99,42 +137,71 @@ func (s *Server) postOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 
-	var userID any // NULL = guest checkout
-	if u := userFrom(r); u != nil {
-		userID = u.ID
+	quote, err := quoteOrder(ctx, tx, u, body.Items, body.Courier, body.Voucher, true)
+	var ce checkoutError
+	if errors.As(err, &ce) {
+		errJSON(w, http.StatusBadRequest, ce.Error())
+		return
 	}
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO orders (id, user_id, cust_name, cust_email, cust_phone, cust_address, cust_city, subtotal, courier, shipping_cost, total)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-		id, userID, body.Customer.Name, body.Customer.Email, body.Customer.Phone, body.Customer.Address, body.Customer.City,
-		subtotal, body.Shipping.Courier, body.Shipping.Cost, total); err != nil {
+	if err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	for _, it := range body.Items {
-		// listing_id hanya diisi bila produk katalog masih ada (snapshot tetap tersimpan)
-		var listingID any
-		var exists bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM listings WHERE id=$1)`, it.ProductID).Scan(&exists); err == nil && exists {
-			listingID = it.ProductID
-		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO order_items (order_id, listing_id, title, type, color, size, qty, unit_price, design_uri)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-			id, listingID, it.Title, it.Type, it.Color, it.Size, it.Qty, it.Price, nilIfEmpty(it.DesignURI)); err != nil {
+	// voucher yang diketik tapi tidak berlaku → tolak, jangan diam-diam ditagih harga penuh
+	if quote.VoucherError != "" {
+		errJSON(w, http.StatusBadRequest, "Voucher: "+quote.VoucherError)
+		return
+	}
+
+	id, err := newOrderID(ctx, tx)
+	if err != nil {
+		errJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var voucherCode any
+	if quote.Voucher != nil {
+		voucherCode = quote.Voucher.Code
+	}
+	c := body.Customer
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO orders (id, user_id, cust_name, cust_email, cust_phone, cust_address, cust_city, cust_postal, notes,
+		                    subtotal, courier, shipping_cost, discount, voucher_code, total)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+		id, u.ID, c.Name, c.Email, c.Phone, c.Address, c.City, c.Postal, notes,
+		quote.Subtotal, quote.Courier.ID, quote.Shipping, quote.Discount, voucherCode, quote.Total); err != nil {
+		errJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, it := range quote.Items {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO order_items (order_id, listing_id, title, type, color, size, qty, unit_price, design_uri)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+			id, nilIfEmpty(it.listingID), it.Title, it.Type, it.Color, it.Size, it.Qty, it.Price, nilIfEmpty(it.DesignURI)); err != nil {
 			errJSON(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	}
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO payments (order_id, method, ref, amount) VALUES ($1,$2,$3,$4)`,
-		id, body.Method, fmt.Sprintf("MID-%08d", rand.IntN(100_000_000)), total); err != nil {
+		`INSERT INTO payments (order_id, method, ref, amount) VALUES ($1,'belum dipilih',$2,$3)`,
+		id, fmt.Sprintf("MID-%08d", rand.IntN(100_000_000)), quote.Total); err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO order_events (order_id, label) VALUES ($1, 'Pesanan dibuat')`, id); err != nil {
+	label := "Pesanan dibuat"
+	if quote.Voucher != nil {
+		label += " · voucher " + quote.Voucher.Code
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO order_events (order_id, label) VALUES ($1, $2)`, id, label); err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if body.SaveProfile {
+		if _, err := tx.Exec(ctx,
+			`UPDATE users SET phone=$2, address=$3, city=$4, postal_code=$5 WHERE id=$1`,
+			u.ID, c.Phone, c.Address, c.City, c.Postal); err != nil {
+			errJSON(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
@@ -147,7 +214,7 @@ func (s *Server) postOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	_, _ = s.pool.Exec(ctx,
 		`INSERT INTO track_events (session_id, type, label, value) VALUES ($1,'begin_checkout',$2,$3)`,
-		session, id, total)
+		session, id, quote.Total)
 
 	order, err := s.loadOrder(ctx, id)
 	if err != nil {
@@ -157,8 +224,62 @@ func (s *Server) postOrder(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"order": order})
 }
 
+// newOrderID: KK-YYMMDD-nnnn, diulang bila kebetulan sudah dipakai.
+func newOrderID(ctx context.Context, q querier) (string, error) {
+	day := time.Now().Format("060102")
+	for range 20 {
+		id := fmt.Sprintf("KK-%s-%d", day, 1000+rand.IntN(9000))
+		var taken bool
+		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM orders WHERE id=$1)`, id).Scan(&taken); err != nil {
+			return "", err
+		}
+		if !taken {
+			return id, nil
+		}
+	}
+	return "", errors.New("gagal membuat nomor pesanan unik")
+}
+
+// GET /api/orders (admin) ?status=&q=&limit=&offset= → {orders, total}
 func (s *Server) getOrders(w http.ResponseWriter, r *http.Request) {
-	orders, err := s.loadOrders(r.Context(), 50)
+	q := r.URL.Query()
+	where := []string{}
+	args := []any{}
+	if st := q.Get("status"); st != "" {
+		args = append(args, st)
+		where = append(where, fmt.Sprintf("o.status::text = $%d", len(args)))
+	}
+	if term := strings.TrimSpace(q.Get("q")); term != "" {
+		args = append(args, "%"+strings.ToLower(term)+"%")
+		n := len(args)
+		where = append(where, fmt.Sprintf(
+			"(lower(o.id) LIKE $%d OR lower(o.cust_name) LIKE $%d OR lower(o.cust_email) LIKE $%d OR lower(COALESCE(u.username,'')) LIKE $%d)", n, n, n, n))
+	}
+	clause := ""
+	if len(where) > 0 {
+		clause = "WHERE " + strings.Join(where, " AND ")
+	}
+	limit := clampInt(q.Get("limit"), 50, 1, 200)
+	offset := clampInt(q.Get("offset"), 0, 0, 1_000_000)
+
+	ctx := r.Context()
+	var total int
+	if err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM orders o LEFT JOIN users u ON u.id = o.user_id `+clause, args...).Scan(&total); err != nil {
+		errJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	orders, err := s.loadOrdersPage(ctx, clause, args, limit, offset)
+	if err != nil {
+		errJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"orders": orders, "total": total})
+}
+
+// GET /api/orders/mine (login) — riwayat pesanan akun ini
+func (s *Server) getMyOrders(w http.ResponseWriter, r *http.Request) {
+	orders, err := s.loadOrdersPage(r.Context(), `WHERE o.user_id = $1`, []any{userFrom(r).ID}, 100, 0)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return
@@ -166,21 +287,38 @@ func (s *Server) getOrders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"orders": orders})
 }
 
-func (s *Server) getOrder(w http.ResponseWriter, r *http.Request) {
+// canSeeOrder: pemilik pesanan atau admin. Selain itu dianggap tidak ada
+// (404, bukan 403) supaya nomor pesanan orang lain tidak bisa ditebak-tebak.
+func (s *Server) ownedOrder(w http.ResponseWriter, r *http.Request) (*Order, bool) {
 	order, err := s.loadOrder(r.Context(), r.PathValue("id"))
-	if errors.Is(err, pgx.ErrNoRows) {
+	u := userFrom(r)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && u.Role != "admin" && order.UserID != u.ID) {
 		errJSON(w, http.StatusNotFound, "Pesanan tidak ditemukan")
-		return
+		return nil, false
 	}
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
-		return
+		return nil, false
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"order": order})
+	return order, true
 }
 
+// GET /api/orders/{id} (pemilik / admin)
+func (s *Server) getOrder(w http.ResponseWriter, r *http.Request) {
+	if order, ok := s.ownedOrder(w, r); ok {
+		writeJSON(w, http.StatusOK, map[string]any{"order": order})
+	}
+}
+
+// PATCH /api/orders/{id}
+//
+//	{action:"pay", method}  — pemilik / admin (pengganti webhook gateway di prototipe)
+//	{action:"advance"}      — admin saja (simulasi produksi & pengiriman)
 func (s *Server) patchOrder(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	order, ok := s.ownedOrder(w, r)
+	if !ok {
+		return
+	}
 	var body struct {
 		Action string `json:"action"`
 		Method string `json:"method"`
@@ -193,9 +331,13 @@ func (s *Server) patchOrder(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch body.Action {
 	case "pay":
-		err = s.payOrder(ctx, id, body.Method)
+		err = s.payOrder(ctx, order.ID, truncate(body.Method, 40))
 	case "advance":
-		err = s.advanceOrder(ctx, id)
+		if userFrom(r).Role != "admin" {
+			errJSON(w, http.StatusForbidden, "Hanya admin yang bisa memajukan status pesanan")
+			return
+		}
+		err = s.advanceOrder(ctx, order.ID)
 	default:
 		errJSON(w, http.StatusBadRequest, "Aksi tidak valid")
 		return
@@ -208,12 +350,20 @@ func (s *Server) patchOrder(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	order, err := s.loadOrder(ctx, id)
+	order, err = s.loadOrder(ctx, order.ID)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"order": order})
+}
+
+func clampInt(raw string, def, lo, hi int) int {
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return def
+	}
+	return max(lo, min(hi, n))
 }
 
 // payOrder = pengganti webhook notifikasi gateway pembayaran.
@@ -300,10 +450,110 @@ func (s *Server) advanceOrder(ctx context.Context, id string) error {
 	return tx.Commit(ctx)
 }
 
+// ---- pesanan masuk untuk kreator --------------------------------------------
+
+type CreatorOrderItem struct {
+	OrderID       string `json:"orderId"`
+	CreatedAt     int64  `json:"createdAt"`
+	Status        string `json:"status"`
+	PaymentStatus string `json:"paymentStatus"`
+	ListingID     string `json:"listingId"`
+	Title         string `json:"title"`
+	Type          string `json:"type"`
+	Color         string `json:"color"`
+	Size          string `json:"size"`
+	Qty           int    `json:"qty"`
+	UnitPrice     int    `json:"unitPrice"`
+	DesignURI     string `json:"designUri,omitempty"`
+	Royalty       int    `json:"royalty"`       // sudah dibukukan, atau estimasi bila belum dibayar
+	RoyaltyBooked bool   `json:"royaltyBooked"` // true = pembayaran lunas, royalti tercatat
+	Buyer         string `json:"buyer"`         // nama depan + inisial saja (privasi pembeli)
+	City          string `json:"city"`
+}
+
+// GET /api/designer/orders (kreator; admin dengan ?designer=) — item pesanan
+// yang memuat produk milik kreator ini. Alamat & kontak pembeli tidak dibuka:
+// produksi & pengiriman diurus platform.
+func (s *Server) getDesignerOrders(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r)
+	designerID := ""
+	if u.Designer != nil {
+		designerID = u.Designer.ID
+	}
+	if u.Role == "admin" && r.URL.Query().Get("designer") != "" {
+		designerID = r.URL.Query().Get("designer")
+	}
+	if designerID == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"items": []CreatorOrderItem{}, "summary": map[string]int{}})
+		return
+	}
+	rows, err := s.pool.Query(r.Context(), `
+		SELECT o.id, (extract(epoch FROM o.created_at)*1000)::bigint, o.status::text, p.status::text,
+		       oi.listing_id, oi.title, oi.type, oi.color, oi.size, oi.qty, oi.unit_price, COALESCE(oi.design_uri,''),
+		       COALESCE(ry.amount, round(oi.unit_price * oi.qty * dr.royalty_share)::int), ry.id IS NOT NULL,
+		       o.cust_name, o.cust_city
+		FROM order_items oi
+		JOIN orders o     ON o.id = oi.order_id
+		JOIN payments p   ON p.order_id = o.id
+		JOIN listings l   ON l.id = oi.listing_id
+		JOIN designs d    ON d.id = l.design_id
+		JOIN designers dr ON dr.id = d.designer_id
+		LEFT JOIN royalties ry ON ry.order_item_id = oi.id
+		WHERE d.designer_id = $1
+		ORDER BY o.created_at DESC, oi.id
+		LIMIT 200`, designerID)
+	if err != nil {
+		errJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []CreatorOrderItem{}
+	orders := map[string]bool{}
+	summary := map[string]int{"orders": 0, "units": 0, "paidUnits": 0, "royaltyBooked": 0, "royaltyPending": 0}
+	for rows.Next() {
+		var it CreatorOrderItem
+		var name string
+		if err := rows.Scan(&it.OrderID, &it.CreatedAt, &it.Status, &it.PaymentStatus,
+			&it.ListingID, &it.Title, &it.Type, &it.Color, &it.Size, &it.Qty, &it.UnitPrice, &it.DesignURI,
+			&it.Royalty, &it.RoyaltyBooked, &name, &it.City); err != nil {
+			errJSON(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		it.Buyer = shortName(name)
+		items = append(items, it)
+		orders[it.OrderID] = true
+		summary["units"] += it.Qty
+		if it.RoyaltyBooked {
+			summary["paidUnits"] += it.Qty
+			summary["royaltyBooked"] += it.Royalty
+		} else {
+			summary["royaltyPending"] += it.Royalty
+		}
+	}
+	if err := rows.Err(); err != nil {
+		errJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	summary["orders"] = len(orders)
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "summary": summary})
+}
+
+// shortName: "Budi Santoso Wijaya" → "Budi S."
+func shortName(name string) string {
+	parts := strings.Fields(name)
+	switch len(parts) {
+	case 0:
+		return "Pembeli"
+	case 1:
+		return parts[0]
+	}
+	return parts[0] + " " + strings.ToUpper(string([]rune(parts[1])[:1])) + "."
+}
+
 // ---- loading ------------------------------------------------------------
 
 func (s *Server) loadOrder(ctx context.Context, id string) (*Order, error) {
-	orders, err := s.loadOrdersWhere(ctx, `WHERE o.id = $1`, []any{id}, 1)
+	orders, err := s.loadOrdersPage(ctx, `WHERE o.id = $1`, []any{id}, 1, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -314,21 +564,24 @@ func (s *Server) loadOrder(ctx context.Context, id string) (*Order, error) {
 }
 
 func (s *Server) loadOrders(ctx context.Context, limit int) ([]Order, error) {
-	return s.loadOrdersWhere(ctx, ``, nil, limit)
+	return s.loadOrdersPage(ctx, ``, nil, limit, 0)
 }
 
-func (s *Server) loadOrdersWhere(ctx context.Context, where string, args []any, limit int) ([]Order, error) {
+// loadOrdersPage: where boleh mengacu ke alias o (orders), p (payments), u (users).
+func (s *Server) loadOrdersPage(ctx context.Context, where string, args []any, limit, offset int) ([]Order, error) {
 	query := fmt.Sprintf(`
 		SELECT o.id, (extract(epoch FROM o.created_at)*1000)::bigint,
-		       o.cust_name, o.cust_email, o.cust_phone, o.cust_address, o.cust_city,
-		       o.subtotal, o.courier, o.shipping_cost, o.total, o.status,
+		       COALESCE(o.user_id,''), COALESCE(u.username,''),
+		       o.cust_name, o.cust_email, o.cust_phone, o.cust_address, o.cust_city, o.cust_postal, o.notes,
+		       o.subtotal, o.courier, o.shipping_cost, o.discount, COALESCE(o.voucher_code,''), o.total, o.status,
 		       p.method, p.status, p.ref,
 		       (extract(epoch FROM p.paid_at)*1000)::bigint
 		FROM orders o
 		JOIN payments p ON p.order_id = o.id
+		LEFT JOIN users u ON u.id = o.user_id
 		%s
 		ORDER BY o.created_at DESC
-		LIMIT %d`, where, limit)
+		LIMIT %d OFFSET %d`, where, limit, offset)
 
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -341,9 +594,10 @@ func (s *Server) loadOrdersWhere(ctx context.Context, where string, args []any, 
 	ids := []string{}
 	for rows.Next() {
 		var o Order
-		if err := rows.Scan(&o.ID, &o.CreatedAt,
+		if err := rows.Scan(&o.ID, &o.CreatedAt, &o.UserID, &o.Username,
 			&o.Customer.Name, &o.Customer.Email, &o.Customer.Phone, &o.Customer.Address, &o.Customer.City,
-			&o.Subtotal, &o.Shipping.Courier, &o.Shipping.Cost, &o.Total, &o.Status,
+			&o.Customer.Postal, &o.Notes,
+			&o.Subtotal, &o.Shipping.Courier, &o.Shipping.Cost, &o.Discount, &o.VoucherCode, &o.Total, &o.Status,
 			&o.Payment.Method, &o.Payment.Status, &o.Payment.Ref, &o.Payment.PaidAt); err != nil {
 			return nil, err
 		}

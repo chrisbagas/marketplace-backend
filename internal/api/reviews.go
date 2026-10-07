@@ -101,7 +101,7 @@ func (s *Server) postReview(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	var status, author string
-	if err := s.pool.QueryRow(ctx, `SELECT status, cust_name FROM orders WHERE id=$1`, body.OrderID).
+	if err := s.pool.QueryRow(ctx, `SELECT status, cust_name FROM orders WHERE id=$1 AND user_id=$2`, body.OrderID, userFrom(r).ID).
 		Scan(&status, &author); err != nil {
 		errJSON(w, http.StatusNotFound, "Pesanan tidak ditemukan")
 		return

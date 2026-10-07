@@ -69,13 +69,20 @@ peran salah → `403`.
 | `/api/auth/password/reset` | POST | publik | `{token, password}` → password baru + sesi baru |
 | `/api/auth/google/start`, `/callback` | GET | publik | Alur OAuth Google (redirect) |
 | `/api/products`, `/api/products/{id}`, `/api/categories` | GET | publik | Katalog |
-| `/api/orders` | POST | publik | Buat pesanan (guest boleh; bila login, tertaut ke akun) |
-| `/api/orders` | GET | admin | Daftar pesanan |
-| `/api/orders/{id}` | GET / PATCH | publik | Detail / `{action:"pay"}` (≈ webhook gateway) / `{action:"advance"}` |
+| `/api/checkout/quote` | POST | login | `{items, courier, voucher}` → ringkasan harga dari server (harga, ongkir, diskon) |
+| `/api/orders` | POST | login | Buat pesanan — harga dihitung ulang di server, tertaut ke akun |
+| `/api/orders` | GET | admin | Daftar pesanan `?status=&q=&limit=&offset=` → `{orders, total}` |
+| `/api/orders/mine` | GET | login | Riwayat pesanan akun ini |
+| `/api/orders/{id}` | GET | pemilik, admin | Detail (akun lain → 404) |
+| `/api/orders/{id}` | PATCH | pemilik, admin | `{action:"pay"}` (≈ webhook gateway); `{action:"advance"}` hanya admin |
+| `/api/designer/orders` | GET | kreator, admin | Item pesanan yang memuat produk kreator + royalti (tanpa alamat/kontak pembeli) |
+| `/api/vouchers` | GET / POST | admin | Daftar (+ pemakaian) / buat voucher |
+| `/api/vouchers/{code}` | PATCH | admin | `{active}` |
 | `/api/designs` | GET / POST | kreator, admin | Pengajuan (kreator: hanya miliknya) / ajukan atas nama toko sendiri |
 | `/api/designs` | PATCH | admin | Moderasi |
 | `/api/listings/{id}` | PATCH | kreator (pemilik), admin | Ubah listing |
-| `/api/reviews` | GET / POST | publik | Ulasan (POST butuh id pesanan selesai) |
+| `/api/reviews` | GET | publik | Ulasan yang lolos moderasi |
+| `/api/reviews` | POST | login | Ulasan — hanya untuk pesanan selesai milik akun ini |
 | `/api/reviews` | PATCH | admin | Moderasi ulasan |
 | `/api/profile`, `/api/user-designs` | * | login | Profil & desain custom milik akun |
 | `/api/uploads` | POST | login | Unggah gambar |
@@ -100,9 +107,24 @@ internal/api/
   auth_email.go        verifikasi email + lupa/reset password (token sekali pakai)
   google.go            login Google (OAuth code flow + userinfo)
 internal/mail/         pengirim SMTP (Mailpit di dev, penyedia di produksi) + template email
-  orders.go            siklus pesanan + pembayaran + royalti
+  checkout.go          quote (harga dari DB), kurir, voucher, kelola voucher (admin)
+  orders.go            buat pesanan, akses pemilik/admin, pembayaran, royalti, pesanan masuk kreator
   designs.go           pengajuan & moderasi desain
   track.go             event perilaku + web vitals
   stats.go             agregasi dashboard (SQL percentile_cont, FILTER)
   products.go          katalog
 ```
+
+## Checkout & voucher
+
+- Browser hanya mengirim **apa** yang dibeli (produk, warna, ukuran, qty). Harga satuan, ongkir,
+  dan diskon dihitung server (`quoteOrder`) — dipakai oleh `/api/checkout/quote` dan saat pesanan
+  dibuat, jadi angka yang tampil = angka yang ditagih.
+- Ukuran berbeda dari produk yang sama = baris terpisah; baris kembar (produk+warna+ukuran) digabung.
+  Maks 99 per baris, 30 baris per pesanan. Ukuran/warna divalidasi terhadap katalog; listing
+  nonaktif ditolak. Desain custom: harga dasar produk + Rp25.000, gambar harus `/uploads/…`.
+- Voucher: `percent` (dengan batas maks), `fixed`, `shipping` (subsidi ongkir); syarat min. belanja,
+  masa berlaku, kuota total, batas per akun. Voucher yang tidak berlaku saat pesanan dibuat → 400
+  (tidak diam-diam ditagih harga penuh). Diskon ditanggung platform: royalti tetap dari harga item.
+- Voucher demo: `KARYAKITA10` (10%, maks Rp50.000, min Rp100.000), `HEMAT25` (Rp25.000, min
+  Rp150.000, 1× per akun), `GRATISONGKIR` (ongkir s.d. Rp20.000).

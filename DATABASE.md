@@ -3,13 +3,13 @@
 Database: **PostgreSQL 16** · skema penuh di [`internal/db/schema.sql`](internal/db/schema.sql)
 (dimigrasikan otomatis saat API pertama kali start, dicatat di `schema_migrations`).
 
-26 tabel dalam 5 kelompok:
+27 tabel dalam 5 kelompok:
 
 | Kelompok | Tabel |
 |---|---|
 | **Identitas** | `users` (profil + preferensi + kredensial), `sessions` (sesi login), `auth_tokens` (link verifikasi & reset password), `designers`, `user_designs` (desain custom pribadi — tanpa royalti) |
 | **Katalog** | `product_types`, `colors`, `product_type_colors`, `product_type_sizes`, `designs`, `listings`, `categories`, `design_categories` |
-| **Transaksi** | `orders`, `order_items`, `payments`, `order_events`, `reviews` (ulasan terverifikasi + moderasi) |
+| **Transaksi** | `orders`, `order_items`, `payments`, `order_events`, `reviews` (ulasan terverifikasi + moderasi), `vouchers` |
 | **Kreator** | `design_submissions` (terbit jadi listing saat disetujui), `royalties`, `payouts` |
 | **Analitik** | `track_events`, `web_vitals`, `api_metrics`, `search_terms`, `day_stats` |
 
@@ -46,6 +46,7 @@ erDiagram
     listings ||--o| design_submissions : "diterbitkan dari"
 
     orders ||--o{ order_items : "berisi"
+    vouchers ||--o{ orders : "dipakai di"
     orders ||--|| payments : "dibayar via"
     orders ||--o{ order_events : "timeline"
     order_items ||--o| royalties : "menghasilkan"
@@ -139,6 +140,10 @@ erDiagram
         int subtotal
         text courier
         int shipping_cost
+        int discount "potongan voucher"
+        text voucher_code FK "nullable"
+        text cust_postal
+        text notes "catatan untuk kurir"
         int total
         order_status status "menunggu-pembayaran → selesai"
         timestamptz created_at
@@ -163,6 +168,17 @@ erDiagram
         text ref "ref gateway"
         int amount
         timestamptz paid_at "nullable"
+    }
+    vouchers {
+        text code PK "huruf besar"
+        voucher_kind kind "percent | fixed | shipping"
+        int value
+        int min_subtotal
+        int max_discount "nullable"
+        timestamptz ends_at "nullable"
+        int usage_limit "nullable"
+        int per_user_limit
+        bool active
     }
     order_events {
         bigint id PK
@@ -283,7 +299,13 @@ erDiagram
   kali tidak menggandakan royalti (`ON CONFLICT (order_item_id) DO NOTHING`).
 - **Royalti dibukukan saat pembayaran**, dihitung dari `designers.royalty_share` (default 12%),
   satu baris per `order_item` — auditable, tinggal `SUM` untuk saldo kreator.
-- **Guest checkout.** `orders.user_id` nullable; pesanan dari pengguna yang login otomatis tertaut.
+- **Checkout wajib login.** Pesanan baru selalu punya `user_id` dan hanya bisa dilihat pemilik/admin;
+  `user_id` tetap nullable untuk pesanan guest lama.
+- **Harga dihitung server.** `order_items.unit_price`, ongkir, dan `discount` berasal dari database
+  saat checkout, bukan dari browser. `total = subtotal + shipping_cost − discount`.
+- **Voucher** dihitung pemakaiannya dari `orders.voucher_code` (kuota total & per akun), dikunci
+  `FOR UPDATE` saat pesanan dibuat agar kuota tidak terlampaui. Diskon ditanggung platform —
+  royalti tetap dari harga item.
 - **Sesi di database, bukan JWT.** Cookie berisi token acak; tabel `sessions` hanya menyimpan
   hash-nya, jadi kebocoran database tidak membocorkan sesi aktif, dan logout/cabut akses
   berlaku seketika (cukup hapus barisnya).

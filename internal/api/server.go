@@ -57,10 +57,17 @@ func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
 	s.route("GET /api/track", "/api/track", s.authed(s.getTrack, admin))
 	s.route("POST /api/vitals", "/api/vitals", s.postVitals)
 	s.route("GET /api/stats", "/api/stats", s.authed(s.getStats, designer, admin))
-	s.route("POST /api/orders", "/api/orders", s.optionalUser(s.postOrder)) // guest checkout tetap boleh
+	// checkout wajib login: pesanan selalu tertaut ke akun, dan hanya pemilik/admin yang bisa melihatnya
+	s.route("POST /api/checkout/quote", "/api/checkout", s.authed(s.postQuote))
+	s.route("POST /api/orders", "/api/orders", s.authed(s.postOrder))
 	s.route("GET /api/orders", "/api/orders", s.authed(s.getOrders, admin))
-	s.route("GET /api/orders/{id}", "/api/orders", s.getOrder)
-	s.route("PATCH /api/orders/{id}", "/api/orders", s.patchOrder) // simulasi gateway (prototipe)
+	s.route("GET /api/orders/mine", "/api/orders", s.authed(s.getMyOrders))
+	s.route("GET /api/orders/{id}", "/api/orders", s.authed(s.getOrder))     // pemilik / admin
+	s.route("PATCH /api/orders/{id}", "/api/orders", s.authed(s.patchOrder)) // pay: pemilik/admin · advance: admin
+	s.route("GET /api/designer/orders", "/api/designer", s.authed(s.getDesignerOrders, designer, admin))
+	s.route("GET /api/vouchers", "/api/vouchers", s.authed(s.getVouchers, admin))
+	s.route("POST /api/vouchers", "/api/vouchers", s.authed(s.postVoucher, admin))
+	s.route("PATCH /api/vouchers/{code}", "/api/vouchers", s.authed(s.patchVoucher, admin))
 	s.route("GET /api/designs", "/api/designs", s.authed(s.getDesigns, designer, admin))
 	s.route("POST /api/designs", "/api/designs", s.authed(s.postDesign, designer, admin))
 	s.route("PATCH /api/designs", "/api/designs", s.authed(s.patchDesign, admin))
@@ -76,7 +83,7 @@ func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
 	s.route("DELETE /api/user-designs/{id}", "/api/user-designs", s.authed(s.deleteUserDesign))
 	s.mux.Handle("GET /uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadDir))))
 	s.route("GET /api/reviews", "/api/reviews", s.getReviews)
-	s.route("POST /api/reviews", "/api/reviews", s.postReview) // bukti: id pesanan selesai
+	s.route("POST /api/reviews", "/api/reviews", s.authed(s.postReview)) // bukti: pesanan selesai milik akun ini
 	s.route("PATCH /api/reviews", "/api/reviews", s.authed(s.patchReview, admin))
 
 	return s
