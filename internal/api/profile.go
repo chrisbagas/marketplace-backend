@@ -7,9 +7,7 @@ import (
 	"strings"
 )
 
-// Belum ada login: semua sesi diperlakukan sebagai pelanggan demo ini.
-// Saat auth ditambahkan, ganti dengan user dari sesi/JWT.
-const demoUserID = "u-demo"
+// Semua handler di file ini dibungkus s.authed — userFrom(r) selalu terisi.
 
 type Profile struct {
 	ID               string         `json:"id"`
@@ -28,7 +26,7 @@ func (s *Server) getProfile(w http.ResponseWriter, r *http.Request) {
 	var settings []byte
 	err := s.pool.QueryRow(r.Context(), `
 		SELECT id, name, email, phone, address, city, preferred_payment, preferred_courier, settings
-		FROM users WHERE id = $1`, demoUserID).
+		FROM users WHERE id = $1`, userFrom(r).ID).
 		Scan(&p.ID, &p.Name, &p.Email, &p.Phone, &p.Address, &p.City, &p.PreferredPayment, &p.PreferredCourier, &settings)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
@@ -54,11 +52,12 @@ func (s *Server) patchProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	userID := userFrom(r).ID
 	set := func(col string, v *string) error {
 		if v == nil {
 			return nil
 		}
-		_, err := s.pool.Exec(ctx, `UPDATE users SET `+col+` = $2 WHERE id = $1`, demoUserID, strings.TrimSpace(*v))
+		_, err := s.pool.Exec(ctx, `UPDATE users SET `+col+` = $2 WHERE id = $1`, userID, strings.TrimSpace(*v))
 		return err
 	}
 	for col, v := range map[string]*string{
@@ -72,7 +71,7 @@ func (s *Server) patchProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Settings != nil {
 		raw, _ := json.Marshal(body.Settings)
-		if _, err := s.pool.Exec(ctx, `UPDATE users SET settings = $2 WHERE id = $1`, demoUserID, raw); err != nil {
+		if _, err := s.pool.Exec(ctx, `UPDATE users SET settings = $2 WHERE id = $1`, userID, raw); err != nil {
 			errJSON(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -96,7 +95,7 @@ type UserDesign struct {
 func (s *Server) getUserDesigns(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(), `
 		SELECT id, (extract(epoch FROM created_at)*1000)::bigint, title, product_type_id, color_id, uri, width_cm, offset_y_cm
-		FROM user_designs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`, demoUserID)
+		FROM user_designs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`, userFrom(r).ID)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return
@@ -146,7 +145,7 @@ func (s *Server) postUserDesign(w http.ResponseWriter, r *http.Request) {
 		INSERT INTO user_designs (user_id, title, product_type_id, color_id, uri, width_cm, offset_y_cm)
 		VALUES ($1,$2,$3,$4,$5,$6,$7)
 		RETURNING id, (extract(epoch FROM created_at)*1000)::bigint, title, product_type_id, color_id, uri, width_cm, offset_y_cm`,
-		demoUserID, body.Title, body.Type, body.Color, body.URI, body.WidthCm, body.OffsetYCm).
+		userFrom(r).ID, body.Title, body.Type, body.Color, body.URI, body.WidthCm, body.OffsetYCm).
 		Scan(&d.ID, &d.T, &d.Title, &d.Type, &d.Color, &d.URI, &d.WidthCm, &d.OffsetYCm)
 	if err != nil {
 		errJSON(w, http.StatusBadRequest, "Jenis produk atau warna tidak valid")
@@ -161,7 +160,7 @@ func (s *Server) deleteUserDesign(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusBadRequest, "ID tidak valid")
 		return
 	}
-	tag, err := s.pool.Exec(r.Context(), `DELETE FROM user_designs WHERE id = $1 AND user_id = $2`, id, demoUserID)
+	tag, err := s.pool.Exec(r.Context(), `DELETE FROM user_designs WHERE id = $1 AND user_id = $2`, id, userFrom(r).ID)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return

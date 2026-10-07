@@ -40,13 +40,26 @@ func scanSubmission(row interface{ Scan(...any) error }) (DesignSubmission, erro
 }
 
 func (s *Server) getDesigns(w http.ResponseWriter, r *http.Request) {
-	status := r.URL.Query().Get("status")
-	query := submissionCols + ` ORDER BY created_at DESC LIMIT 100`
+	// admin melihat semua pengajuan; kreator hanya miliknya sendiri
+	where := []string{}
 	args := []any{}
-	if status != "" {
-		query = submissionCols + ` WHERE status = $1 ORDER BY created_at DESC LIMIT 100`
-		args = append(args, status)
+	if u := userFrom(r); u.Role != "admin" {
+		designerID := ""
+		if u.Designer != nil {
+			designerID = u.Designer.ID
+		}
+		args = append(args, designerID)
+		where = append(where, fmt.Sprintf("designer_id = $%d", len(args)))
 	}
+	if status := r.URL.Query().Get("status"); status != "" {
+		args = append(args, status)
+		where = append(where, fmt.Sprintf("status = $%d", len(args)))
+	}
+	query := submissionCols
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += ` ORDER BY created_at DESC LIMIT 100`
 	rows, err := s.pool.Query(r.Context(), query, args...)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
@@ -106,8 +119,24 @@ func (s *Server) postDesign(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusRequestEntityTooLarge, "Ukuran gambar terlalu besar (maks ±1 MB)")
 		return
 	}
+	// kreator selalu mengajukan atas nama profil tokonya sendiri;
+	// admin boleh mengisi nama kreator bebas (mis. untuk kurasi titipan)
+	u := userFrom(r)
+	// karya yang dijual atas nama kreator butuh kontak yang terbukti valid
+	if u.Role != "admin" && !u.EmailVerified {
+		errJSON(w, http.StatusForbidden, "Verifikasi email kamu dulu sebelum mengajukan desain — cek kotak masuk atau kirim ulang link dari banner di atas")
+		return
+	}
+	var designerID any
+	if u.Designer != nil {
+		designerID = u.Designer.ID
+		body.Designer = u.Designer.Name
+	} else if u.Role != "admin" {
+		errJSON(w, http.StatusForbidden, "Akun kreator belum punya profil toko")
+		return
+	}
 	if body.Designer == "" {
-		body.Designer = "Kreator Demo"
+		body.Designer = u.Name
 	}
 	if body.Type == "" {
 		body.Type = "kaos"
@@ -130,11 +159,11 @@ func (s *Server) postDesign(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := fmt.Sprintf("ds-%06d", rand.IntN(1_000_000))
-	// tautkan ke profil kreator bila namanya dikenal
-	var designerID any
-	var did string
-	if err := s.pool.QueryRow(ctx, `SELECT id FROM designers WHERE name = $1`, body.Designer).Scan(&did); err == nil {
-		designerID = did
+	if designerID == nil { // admin: tautkan ke profil kreator bila namanya dikenal
+		var did string
+		if err := s.pool.QueryRow(ctx, `SELECT id FROM designers WHERE name = $1`, body.Designer).Scan(&did); err == nil {
+			designerID = did
+		}
 	}
 	if _, err := s.pool.Exec(ctx,
 		`INSERT INTO design_submissions (id, designer_id, designer_name, title, product_type_id, color_id, price, uri, tags, category_ids)

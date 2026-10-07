@@ -8,16 +8,26 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"karyakita/api/internal/mail"
 )
 
 type Server struct {
 	pool      *pgxpool.Pool
 	mux       *http.ServeMux
 	uploadDir string
+	auth      AuthConfig
+	limiter   *rateLimiter
 }
 
-func NewServer(pool *pgxpool.Pool, uploadDir string) *Server {
-	s := &Server{pool: pool, mux: http.NewServeMux(), uploadDir: uploadDir}
+func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
+	if auth.Mailer == nil {
+		auth.Mailer = mail.Log{ShowBody: true}
+	}
+	if auth.AppURL == "" {
+		auth.AppURL = "http://localhost:3000"
+	}
+	s := &Server{pool: pool, mux: http.NewServeMux(), uploadDir: uploadDir, auth: auth, limiter: newRateLimiter()}
 
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := pool.Ping(r.Context()); err != nil {
@@ -27,31 +37,47 @@ func NewServer(pool *pgxpool.Pool, uploadDir string) *Server {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
 
+	// Akses: publik kecuali dibungkus s.authed(handler, peran...).
+	// s.authed tanpa peran = cukup login.
+	const designer, admin = "designer", "admin"
+
+	s.route("GET /api/auth/me", "/api/auth", s.getMe)
+	s.route("GET /api/auth/providers", "/api/auth", s.getProviders)
+	s.route("POST /api/auth/signup", "/api/auth", s.postSignup)
+	s.route("POST /api/auth/login", "/api/auth", s.postLogin)
+	s.route("POST /api/auth/logout", "/api/auth", s.postLogout)
+	s.route("POST /api/auth/verify-email", "/api/auth", s.postVerifyEmail)
+	s.route("POST /api/auth/verify-email/resend", "/api/auth", s.authed(s.postResendVerification))
+	s.route("POST /api/auth/password/forgot", "/api/auth", s.postForgotPassword)
+	s.route("POST /api/auth/password/reset", "/api/auth", s.postResetPassword)
+	s.route("GET /api/auth/google/start", "/api/auth/google", s.googleStart)
+	s.route("GET /api/auth/google/callback", "/api/auth/google", s.googleCallback)
+
 	s.route("POST /api/track", "/api/track", s.postTrack)
-	s.route("GET /api/track", "/api/track", s.getTrack)
+	s.route("GET /api/track", "/api/track", s.authed(s.getTrack, admin))
 	s.route("POST /api/vitals", "/api/vitals", s.postVitals)
-	s.route("GET /api/stats", "/api/stats", s.getStats)
-	s.route("POST /api/orders", "/api/orders", s.postOrder)
-	s.route("GET /api/orders", "/api/orders", s.getOrders)
+	s.route("GET /api/stats", "/api/stats", s.authed(s.getStats, designer, admin))
+	s.route("POST /api/orders", "/api/orders", s.optionalUser(s.postOrder)) // guest checkout tetap boleh
+	s.route("GET /api/orders", "/api/orders", s.authed(s.getOrders, admin))
 	s.route("GET /api/orders/{id}", "/api/orders", s.getOrder)
-	s.route("PATCH /api/orders/{id}", "/api/orders", s.patchOrder)
-	s.route("GET /api/designs", "/api/designs", s.getDesigns)
-	s.route("POST /api/designs", "/api/designs", s.postDesign)
-	s.route("PATCH /api/designs", "/api/designs", s.patchDesign)
+	s.route("PATCH /api/orders/{id}", "/api/orders", s.patchOrder) // simulasi gateway (prototipe)
+	s.route("GET /api/designs", "/api/designs", s.authed(s.getDesigns, designer, admin))
+	s.route("POST /api/designs", "/api/designs", s.authed(s.postDesign, designer, admin))
+	s.route("PATCH /api/designs", "/api/designs", s.authed(s.patchDesign, admin))
 	s.route("GET /api/products", "/api/products", s.getProducts)
 	s.route("GET /api/products/{id}", "/api/products", s.getProduct)
 	s.route("GET /api/categories", "/api/categories", s.getCategories)
-	s.route("PATCH /api/listings/{id}", "/api/listings", s.patchListing)
-	s.route("POST /api/uploads", "/api/uploads", s.postUpload)
-	s.route("GET /api/profile", "/api/profile", s.getProfile)
-	s.route("PATCH /api/profile", "/api/profile", s.patchProfile)
-	s.route("GET /api/user-designs", "/api/user-designs", s.getUserDesigns)
-	s.route("POST /api/user-designs", "/api/user-designs", s.postUserDesign)
-	s.route("DELETE /api/user-designs/{id}", "/api/user-designs", s.deleteUserDesign)
+	s.route("PATCH /api/listings/{id}", "/api/listings", s.authed(s.patchListing, designer, admin))
+	s.route("POST /api/uploads", "/api/uploads", s.authed(s.postUpload))
+	s.route("GET /api/profile", "/api/profile", s.authed(s.getProfile))
+	s.route("PATCH /api/profile", "/api/profile", s.authed(s.patchProfile))
+	s.route("GET /api/user-designs", "/api/user-designs", s.authed(s.getUserDesigns))
+	s.route("POST /api/user-designs", "/api/user-designs", s.authed(s.postUserDesign))
+	s.route("DELETE /api/user-designs/{id}", "/api/user-designs", s.authed(s.deleteUserDesign))
 	s.mux.Handle("GET /uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadDir))))
 	s.route("GET /api/reviews", "/api/reviews", s.getReviews)
-	s.route("POST /api/reviews", "/api/reviews", s.postReview)
-	s.route("PATCH /api/reviews", "/api/reviews", s.patchReview)
+	s.route("POST /api/reviews", "/api/reviews", s.postReview) // bukti: id pesanan selesai
+	s.route("PATCH /api/reviews", "/api/reviews", s.authed(s.patchReview, admin))
 
 	return s
 }
@@ -64,7 +90,7 @@ func (s *Server) route(pattern, metricRoute string, h http.HandlerFunc) {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// CORS: dev berjalan lintas port (Next 3000 → API 8080)
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
