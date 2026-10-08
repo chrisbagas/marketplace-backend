@@ -61,8 +61,9 @@ func wantBalance(t *testing.T, b map[string]any, pending, available, inProcess, 
 
 func TestPayoutOnlyFromCompletedOrders(t *testing.T) {
 	f := setupCheckout(t)
-	r1 := int(float64(f.price*3)*0.12 + 0.5) // royalti 12%
-	r2 := int(float64(f.price*2)*0.12 + 0.5)
+	base := kaosBase(t, f.pool)
+	r1 := 3 * (f.price - base) // kreator = harga jual − harga dasar
+	r2 := 2 * (f.price - base)
 
 	wantBalance(t, f.balance(t), 0, 0, 0, 0)
 
@@ -168,7 +169,7 @@ func TestPayoutOnlyFromCompletedOrders(t *testing.T) {
 
 func TestPayoutConcurrentRequestsCannotOverdraw(t *testing.T) {
 	f := setupCheckout(t)
-	o := f.paidOrder(t, 5) // royalti ≈ 73.800
+	o := f.paidOrder(t, 5) // royalti 5 × (123.000 − harga dasar)
 	f.complete(t, o)
 	if rec, out := call(f.s, "PATCH", "/api/designer/bank", map[string]any{"bankName": "GoPay", "account": "081234567890", "holder": "Kreator Tes"}, f.creator); rec.Code != http.StatusOK {
 		t.Fatalf("rekening: %d %v", rec.Code, out)

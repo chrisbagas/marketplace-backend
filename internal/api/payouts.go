@@ -156,8 +156,32 @@ func (s *Server) getDesignerPayouts(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// royalti yang dibukukan per hari, 14 hari terakhir (grafik dashboard kreator)
+	type day struct {
+		Date   string `json:"date"`
+		Amount int    `json:"amount"`
+	}
+	daily := []day{}
+	rows, err := s.pool.Query(ctx, `
+		SELECT to_char(d, 'YYYY-MM-DD'), COALESCE(sum(r.amount), 0)::int
+		FROM generate_series(current_date - 13, current_date, interval '1 day') d
+		LEFT JOIN royalties r ON r.designer_id = $1 AND r.created_at >= d AND r.created_at < d + interval '1 day'
+		GROUP BY d ORDER BY d`, id)
+	if err != nil {
+		errJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var d day
+		if err := rows.Scan(&d.Date, &d.Amount); err != nil {
+			errJSON(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		daily = append(daily, d)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"balance": bal, "bank": bank, "payouts": list, "minimum": PayoutMinimum,
+		"balance": bal, "bank": bank, "payouts": list, "minimum": PayoutMinimum, "daily": daily,
 	})
 }
 
@@ -169,6 +193,22 @@ var (
 		"Bank Jago", "SeaBank", "Jenius (SMBC)", "GoPay", "OVO", "DANA", "ShopeePay",
 	}
 )
+
+// cleanBank merapikan & memeriksa rekening tujuan transfer. msg != "" = tidak valid.
+func cleanBank(b BankAccount) (BankAccount, string) {
+	b.BankName = strings.TrimSpace(b.BankName)
+	b.Account = strings.Join(strings.FieldsFunc(b.Account, func(c rune) bool { return c == ' ' || c == '-' || c == '.' }), "")
+	b.Holder = truncate(strings.Join(strings.Fields(b.Holder), " "), 80)
+	switch {
+	case !slices.Contains(payoutBanks, b.BankName):
+		return b, "Pilih bank atau e-wallet dari daftar"
+	case !bankAccountRe.MatchString(b.Account):
+		return b, "Nomor rekening harus 6–20 angka"
+	case len(b.Holder) < 3:
+		return b, "Isi nama pemilik rekening sesuai buku tabungan"
+	}
+	return b, ""
+}
 
 // PATCH /api/designer/bank {bankName, account, holder} — rekening tujuan penarikan.
 func (s *Server) patchDesignerBank(w http.ResponseWriter, r *http.Request) {
@@ -182,18 +222,9 @@ func (s *Server) patchDesignerBank(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusBadRequest, "Bad request")
 		return
 	}
-	b.BankName = strings.TrimSpace(b.BankName)
-	b.Account = strings.Join(strings.FieldsFunc(b.Account, func(c rune) bool { return c == ' ' || c == '-' || c == '.' }), "")
-	b.Holder = truncate(strings.Join(strings.Fields(b.Holder), " "), 80)
-	switch {
-	case !slices.Contains(payoutBanks, b.BankName):
-		errJSON(w, http.StatusBadRequest, "Pilih bank atau e-wallet dari daftar")
-		return
-	case !bankAccountRe.MatchString(b.Account):
-		errJSON(w, http.StatusBadRequest, "Nomor rekening harus 6–20 angka")
-		return
-	case len(b.Holder) < 3:
-		errJSON(w, http.StatusBadRequest, "Isi nama pemilik rekening sesuai buku tabungan")
+	b, msg := cleanBank(b)
+	if msg != "" {
+		errJSON(w, http.StatusBadRequest, msg)
 		return
 	}
 	if _, err := s.pool.Exec(r.Context(),

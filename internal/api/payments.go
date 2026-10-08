@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"karyakita/api/internal/db"
 	"karyakita/api/internal/midtrans"
 )
 
@@ -287,8 +288,13 @@ func (s *Server) payOrderVia(ctx context.Context, orderID, method, paymentType, 
 	if err := s.payOrder(ctx, orderID, truncate(method, 40)); err != nil {
 		return err
 	}
-	_, err := s.pool.Exec(ctx, `UPDATE payments SET gateway=$2, payment_type=COALESCE($3, payment_type) WHERE order_id=$1`,
-		orderID, gateway, nilIfEmpty(paymentType))
+	var amount int
+	var paidMethod string
+	if err := s.pool.QueryRow(ctx, `SELECT amount, method FROM payments WHERE order_id=$1`, orderID).Scan(&amount, &paidMethod); err != nil {
+		return err
+	}
+	_, err := s.pool.Exec(ctx, `UPDATE payments SET gateway=$2, payment_type=COALESCE($3, payment_type), gateway_fee=$4 WHERE order_id=$1`,
+		orderID, gateway, nilIfEmpty(paymentType), db.GatewayFee(paidMethod+" "+gateway, paymentType, amount))
 	return err
 }
 
