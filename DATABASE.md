@@ -88,6 +88,9 @@ erDiagram
         int followers
         numeric rating
         numeric royalty_share "default 0.12"
+        text bank_name "nullable, rekening tujuan penarikan"
+        text bank_account "nullable"
+        text bank_holder "nullable"
     }
     product_types {
         text id PK "kaos | hoodie | mug | totebag"
@@ -216,9 +219,15 @@ erDiagram
         bigint id PK
         text designer_id FK
         int amount
-        payout_status status "diminta | diproses | dibayar"
+        payout_status status "diminta | diproses | dibayar | ditolak"
         timestamptz requested_at
         timestamptz paid_at "nullable"
+        text bank_name "salinan rekening saat diajukan"
+        text bank_account
+        text bank_holder
+        text reference "no. referensi transfer, nullable"
+        text note "alasan tolak / catatan admin, nullable"
+        timestamptz processed_at "nullable"
     }
     categories {
         text id PK "alam | anime | batik | ..."
@@ -305,6 +314,11 @@ erDiagram
   kali tidak menggandakan royalti (`ON CONFLICT (order_item_id) DO NOTHING`).
 - **Royalti dibukukan saat pembayaran**, dihitung dari `designers.royalty_share` (default 12%),
   satu baris per `order_item` — auditable, tinggal `SUM` untuk saldo kreator.
+- **Royalti baru bisa ditarik setelah pesanan `selesai`** (pembeli konfirmasi / selesai otomatis).
+  Saldo tidak disimpan di kolom: `tersedia = SUM(royalti pesanan selesai) − SUM(payouts diminta/
+  diproses/dibayar)`; payout `ditolak` mengembalikan dana. Satu pengajuan terbuka per kreator
+  (unique index parsial), dan pengajuan mengunci baris `designers` supaya dua permintaan bersamaan
+  tidak bisa menarik melebihi saldo. Minimal Rp50.000; transfer masih manual oleh admin.
 - **Checkout wajib login.** Pesanan baru selalu punya `user_id` dan hanya bisa dilihat pemilik/admin;
   `user_id` tetap nullable untuk pesanan guest lama.
 - **Harga dihitung server.** `order_items.unit_price`, ongkir, dan `discount` berasal dari database

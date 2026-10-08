@@ -280,30 +280,6 @@ func SeedIfEmpty(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 
-	// --- contoh payout kreator ---
-	payouts := []struct {
-		designer string
-		amount   int
-		status   string
-		daysAgo  int
-	}{
-		{"d-raka", 1250000, "dibayar", 21},
-		{"d-raka", 890000, "diminta", 1},
-		{"d-tiara", 640000, "dibayar", 14},
-	}
-	for _, p := range payouts {
-		reqAt := now.Add(-time.Duration(p.daysAgo) * day)
-		paidAt := any(nil)
-		if p.status == "dibayar" {
-			paidAt = reqAt.Add(2 * day)
-		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO payouts (designer_id, amount, status, requested_at, paid_at) VALUES ($1,$2,$3,$4,$5)`,
-			p.designer, p.amount, p.status, reqAt, paidAt); err != nil {
-			return err
-		}
-	}
-
 	return tx.Commit(ctx)
 }
 

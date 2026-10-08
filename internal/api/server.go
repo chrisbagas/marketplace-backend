@@ -70,6 +70,12 @@ func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
 	s.route("GET /api/orders/{id}", "/api/orders", s.authed(s.getOrder))     // pemilik / admin
 	s.route("PATCH /api/orders/{id}", "/api/orders", s.authed(s.patchOrder)) // pay: pemilik/admin · advance: admin
 	s.route("GET /api/designer/orders", "/api/designer", s.authed(s.getDesignerOrders, designer, admin))
+	// penarikan saldo kreator: royalti bisa ditarik setelah pesanan selesai; transfer manual oleh admin
+	s.route("GET /api/designer/payouts", "/api/designer", s.authed(s.getDesignerPayouts, designer, admin))
+	s.route("POST /api/designer/payouts", "/api/designer", s.authed(s.postDesignerPayout, designer))
+	s.route("PATCH /api/designer/bank", "/api/designer", s.authed(s.patchDesignerBank, designer))
+	s.route("GET /api/payouts", "/api/payouts", s.authed(s.getPayouts, admin))
+	s.route("PATCH /api/payouts/{id}", "/api/payouts", s.authed(s.patchPayout, admin))
 	s.route("GET /api/vouchers", "/api/vouchers", s.authed(s.getVouchers, admin))
 	s.route("POST /api/vouchers", "/api/vouchers", s.authed(s.postVoucher, admin))
 	s.route("PATCH /api/vouchers/{code}", "/api/vouchers", s.authed(s.patchVoucher, admin))
