@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"karyakita/api/internal/db"
+	"karyakita/api/internal/mail"
 	"karyakita/api/internal/midtrans"
 )
 
@@ -322,7 +323,11 @@ func (s *Server) cancelUnpaidOrder(ctx context.Context, orderID, reason string) 
 	if _, err := tx.Exec(ctx, `INSERT INTO order_events (order_id, label) VALUES ($1,$2)`, orderID, "Pesanan dibatalkan — "+reason); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.mailBuyer(ctx, orderID, mail.OrderCancelled)
+	return nil
 }
 
 // CancelUnpaidOrders membatalkan pesanan yang melewati batas bayar (+ grace).

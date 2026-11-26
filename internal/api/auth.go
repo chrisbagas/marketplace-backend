@@ -40,7 +40,9 @@ type AuthConfig struct {
 	CookieSecure bool   // true di produksi (HTTPS)
 	AppURL       string // origin frontend untuk link di email, mis. http://localhost:3000
 	Mailer       mail.Mailer
-	Google       GoogleConfig
+	// AdminNotifyEmail menerima email "pesanan baru dibayar"; kosong = tidak dikirim.
+	AdminNotifyEmail string
+	Google           GoogleConfig
 }
 
 type DesignerRef struct {

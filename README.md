@@ -18,7 +18,7 @@ Saat pertama kali start, API otomatis:
 3. di luar produksi: memberi password ke akun demo (lihat di bawah).
 
 Konfigurasi lewat env var (lihat `.env.example`): `DATABASE_URL`, `PORT` (default 8081),
-`UPLOAD_DIR`, `APP_ENV`, `DEMO_PASSWORD`, `COOKIE_SECURE`, `APP_URL`, `SMTP_*`, `MAIL_FROM`, `GOOGLE_*`.
+`UPLOAD_DIR`, `APP_ENV`, `DEMO_PASSWORD`, `COOKIE_SECURE`, `APP_URL`, `SMTP_*`, `MAIL_FROM`, `ADMIN_NOTIFY_EMAIL`, `GOOGLE_*`.
 
 ## Autentikasi
 
@@ -47,6 +47,27 @@ Akun demo (password `karyakita123`, atau `DEMO_PASSWORD`; tidak di-set bila `APP
 | `admin` | admin |
 | `raka` | kreator (Raka Wijaya) |
 | `demo` | pelanggan |
+
+## Email transaksi
+
+Dikirim lewat `s.sendMail` (latar belakang) **setelah** perubahan status ter-commit, hanya oleh
+jalur yang benar-benar mengubah status — webhook Midtrans yang diulang, klik ganda, atau job yang
+jalan lagi tidak mengirim dua kali. Link memakai `APP_URL`; template ada di
+`internal/mail/order_templates.go`.
+
+| Kejadian | Penerima | Dikirim dari |
+|---|---|---|
+| Pesanan dibuat (rincian, total, "Bayar sekarang", batas bayar) | pembeli | `postOrder` |
+| Pembayaran diterima | pembeli | `payOrder` (mock/admin `pay`, webhook & sync Midtrans) |
+| Pesanan baru dibayar | `ADMIN_NOTIFY_EMAIL` (kosong = dilewati) | `payOrder` |
+| Dikirim (kurir + resi) | pembeli | `shipOrder` (bukan `update-shipment`) |
+| Tiba (minta konfirmasi, selesai otomatis 48 jam) | pembeli | `markDelivered` |
+| Selesai otomatis | pembeli | `AutoCompleteOrders` |
+| Dibatalkan (batas bayar / kedaluwarsa gateway) | pembeli | `cancelUnpaidOrder` |
+| Desain disetujui (link produk) / ditolak (catatan admin) | kreator | `patchDesign` |
+| Penarikan saldo dibayar (jumlah + referensi) | kreator | `patchPayout` (`paid`) |
+
+Alamat pembeli = email di data pesanan bila ada, selain itu email akunnya.
 
 ## Endpoint
 

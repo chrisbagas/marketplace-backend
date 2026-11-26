@@ -424,5 +424,9 @@ func (s *Server) patchPayout(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// RowsAffected > 0 berarti baris ini baru saja berubah status: tepat sekali per penarikan
+	if body.Action == "paid" {
+		s.mailPayoutPaid(r.Context(), p.DesignerID, p.Amount, p.Reference)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"payout": p})
 }

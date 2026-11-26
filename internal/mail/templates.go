@@ -17,6 +17,10 @@ var layout = template.Must(template.New("email").Parse(`<!doctype html>
   <p style="margin:0 0 24px;font-size:20px;font-weight:800">Karya<span style="color:#0b6244">Kita</span></p>
   <p style="margin:0 0 16px;font-size:16px">Halo {{.Name}},</p>
   {{range .Paragraphs}}<p style="margin:0 0 16px;font-size:15px;line-height:1.6">{{.}}</p>{{end}}
+  {{if .Lines}}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 16px;border-top:1px solid #ece7da">
+  {{range .Lines}}<tr><td style="padding:8px 0;border-bottom:1px solid #ece7da;font-size:14px;line-height:1.5;font-weight:{{if .Bold}}800{{else}}400{{end}}">{{.Label}}</td><td align="right" style="padding:8px 0 8px 12px;border-bottom:1px solid #ece7da;font-size:14px;white-space:nowrap;font-weight:{{if .Bold}}800{{else}}400{{end}}">{{.Value}}</td></tr>{{end}}
+  </table>{{end}}
+  {{range .After}}<p style="margin:0 0 16px;font-size:15px;line-height:1.6">{{.}}</p>{{end}}
   {{if .ButtonURL}}
   <p style="margin:24px 0"><a href="{{.ButtonURL}}" style="display:inline-block;background:#0b6244;color:#ffffff;text-decoration:none;font-weight:700;padding:12px 24px;border-radius:999px">{{.ButtonLabel}}</a></p>
   <p style="margin:0 0 16px;font-size:12px;color:#6b6b66;line-height:1.5">Tombol tidak berfungsi? Salin link ini ke browser:<br><a href="{{.ButtonURL}}" style="color:#0b6244;word-break:break-all">{{.ButtonURL}}</a></p>
@@ -26,9 +30,18 @@ var layout = template.Must(template.New("email").Parse(`<!doctype html>
 </td></tr></table>
 </body></html>`))
 
+// line = satu baris rincian (item pesanan, ongkir, total, ...).
+type line struct {
+	Label string
+	Value string
+	Bold  bool
+}
+
 type content struct {
 	Name        string
 	Paragraphs  []string
+	Lines       []line   // rincian opsional, tampil setelah Paragraphs
+	After       []string // paragraf setelah rincian
 	ButtonURL   string
 	ButtonLabel string
 	Footer      string
@@ -41,6 +54,19 @@ func render(to, subject string, c content) Message {
 	var text bytes.Buffer
 	fmt.Fprintf(&text, "Halo %s,\n\n", c.Name)
 	for _, p := range c.Paragraphs {
+		fmt.Fprintf(&text, "%s\n\n", p)
+	}
+	if len(c.Lines) > 0 {
+		for _, l := range c.Lines {
+			if l.Value == "" {
+				fmt.Fprintf(&text, "  %s\n", l.Label)
+			} else {
+				fmt.Fprintf(&text, "  %s: %s\n", l.Label, l.Value)
+			}
+		}
+		text.WriteString("\n")
+	}
+	for _, p := range c.After {
 		fmt.Fprintf(&text, "%s\n\n", p)
 	}
 	if c.ButtonURL != "" {

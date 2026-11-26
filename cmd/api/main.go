@@ -70,9 +70,10 @@ func main() {
 	}
 
 	authCfg := api.AuthConfig{
-		CookieSecure: production || os.Getenv("COOKIE_SECURE") == "true",
-		AppURL:       envOr("APP_URL", "http://localhost:3000"),
-		Mailer:       newMailer(production),
+		CookieSecure:     production || os.Getenv("COOKIE_SECURE") == "true",
+		AppURL:           envOr("APP_URL", "http://localhost:3000"),
+		Mailer:           newMailer(production),
+		AdminNotifyEmail: os.Getenv("ADMIN_NOTIFY_EMAIL"),
 		Google: api.GoogleConfig{
 			ClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 			ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),

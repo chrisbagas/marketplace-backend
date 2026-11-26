@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"karyakita/api/internal/db"
+	"karyakita/api/internal/mail"
 )
 
 // JSON shapes match the frontend types in lib/types.ts (epoch ms timestamps).
@@ -231,6 +232,7 @@ func (s *Server) postOrder(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.mailBuyer(ctx, id, mail.OrderCreated)
 
 	session := body.Session
 	if session == "" {
@@ -485,7 +487,11 @@ func (s *Server) payOrder(ctx context.Context, id, method string) error {
 	if err := db.BookPaidOrder(ctx, tx, id); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.mailOrderPaid(ctx, id)
+	return nil
 }
 
 // Langkah status yang boleh dimajukan admin tanpa data tambahan. Sisanya punya
@@ -555,7 +561,11 @@ func (s *Server) markDelivered(ctx context.Context, id string) error {
 		fmt.Sprintf("Paket tiba di tujuan (laporan kurir %s) — menunggu konfirmasi pembeli", courier)); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.mailBuyer(ctx, id, mail.OrderArrived)
+	return nil
 }
 
 // confirmReceived: tiba → selesai oleh pembeli.
@@ -576,20 +586,29 @@ func (s *Server) confirmReceived(ctx context.Context, id string) error {
 }
 
 // AutoCompleteOrders menyelesaikan pesanan "tiba" yang sudah lewat batas
-// konfirmasi. Mengembalikan jumlah pesanan yang diselesaikan.
+// konfirmasi dan mengirim email "selesai otomatis" ke pembelinya.
+// Mengembalikan jumlah pesanan yang diselesaikan.
 func (s *Server) AutoCompleteOrders(ctx context.Context, after time.Duration) (int64, error) {
-	tag, err := s.pool.Exec(ctx, `
+	rows, err := s.pool.Query(ctx, `
 		WITH done AS (
 			UPDATE orders SET status='selesai', completed_at=now()
 			WHERE status='tiba' AND delivered_at <= now() - make_interval(secs => $1)
 			RETURNING id
 		)
-		INSERT INTO order_events (order_id, label) SELECT id, $2 FROM done`,
+		INSERT INTO order_events (order_id, label) SELECT id, $2 FROM done RETURNING order_id`,
 		after.Seconds(), "Selesai otomatis — "+humanDuration(after)+" setelah paket tiba tanpa konfirmasi")
 	if err != nil {
 		return 0, err
 	}
-	return tag.RowsAffected(), nil
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return 0, err
+	}
+	// statement di atas sudah ter-commit; email hanya untuk pesanan yang benar-benar baru selesai
+	for _, id := range ids {
+		s.mailBuyer(ctx, id, mail.OrderCompleted)
+	}
+	return int64(len(ids)), nil
 }
 
 // RunOrderJobs menjalankan AutoCompleteOrders secara berkala sampai ctx selesai.
@@ -675,7 +694,13 @@ func (s *Server) shipOrder(ctx context.Context, id, courier, tracking string, up
 	if _, err := tx.Exec(ctx, `INSERT INTO order_events (order_id, label) VALUES ($1,$2)`, id, label); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	if !update {
+		s.mailBuyer(ctx, id, mail.OrderShipped)
+	}
+	return nil
 }
 
 func isUniqueViolation(err error) bool {

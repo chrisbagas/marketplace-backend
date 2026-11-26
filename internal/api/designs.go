@@ -2,11 +2,14 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net/http"
 	"regexp"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // DesignSubmission matches the frontend shape (t in epoch ms).
@@ -234,22 +237,37 @@ func (s *Server) patchDesign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE design_submissions SET status=$2, note=$3 WHERE id=$1`,
-		body.ID, body.Status, nilIfEmpty(body.Note))
+	// status lama dibaca di baris yang sama dengan update-nya (terkunci): email
+	// hanya dikirim bila status benar-benar berubah, bukan saat PATCH diulang.
+	var prev string
+	err := s.pool.QueryRow(ctx, `
+		WITH old AS (SELECT id, status FROM design_submissions WHERE id=$1 FOR UPDATE)
+		UPDATE design_submissions d SET status=$2, note=$3 FROM old WHERE d.id = old.id
+		RETURNING old.status::text`,
+		body.ID, body.Status, nilIfEmpty(body.Note)).Scan(&prev)
+	if errors.Is(err, pgx.ErrNoRows) {
+		errJSON(w, http.StatusNotFound, "Desain tidak ditemukan")
+		return
+	}
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if tag.RowsAffected() == 0 {
-		errJSON(w, http.StatusNotFound, "Desain tidak ditemukan")
-		return
-	}
 	// disetujui → terbitkan sebagai listing di katalog
-	if body.Status == "disetujui" {
-		if _, err := s.publishSubmission(ctx, body.ID); err != nil {
+	switch body.Status {
+	case "disetujui":
+		listingID, created, err := s.publishSubmission(ctx, body.ID)
+		if err != nil {
 			errJSON(w, http.StatusInternalServerError, "Gagal menerbitkan listing: "+err.Error())
 			return
+		}
+		// email terkirim tepat saat listing terbit (juga bila percobaan pertama gagal lalu diulang)
+		if created {
+			s.mailDesignReviewed(ctx, body.ID, body.Status, listingID)
+		}
+	case "ditolak":
+		if prev != "ditolak" {
+			s.mailDesignReviewed(ctx, body.ID, body.Status, "")
 		}
 	}
 	d, err := s.loadSubmission(ctx, body.ID)
@@ -274,11 +292,12 @@ func slugify(s string) string {
 }
 
 // publishSubmission membuat design + listing dari pengajuan yang disetujui.
-// Idempoten: kalau sudah pernah terbit, kembalikan listing yang sama.
-func (s *Server) publishSubmission(ctx context.Context, subID string) (string, error) {
+// Idempoten: kalau sudah pernah terbit, kembalikan listing yang sama
+// (created=false).
+func (s *Server) publishSubmission(ctx context.Context, subID string) (listingID string, created bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer tx.Rollback(ctx)
 
@@ -291,45 +310,45 @@ func (s *Server) publishSubmission(ctx context.Context, subID string) (string, e
 		SELECT designer_id, published_listing_id, title, product_type_id, uri, price, tags, attribute_ids
 		FROM design_submissions WHERE id=$1 FOR UPDATE`, subID).
 		Scan(&designerID, &published, &title, &ptID, &uri, &price, &tags, &cats); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if published != nil && *published != "" {
-		return *published, nil
+		return *published, false, nil
 	}
 	if designerID == nil {
-		return "", nil // kreator tak dikenal — tidak bisa menerima royalti, biarkan manual
+		return "", false, nil // kreator tak dikenal — tidak bisa menerima royalti, biarkan manual
 	}
 
 	slug := slugify(title)
 	designID := fmt.Sprintf("%s-%04d", slug, rand.IntN(10000))
-	listingID := fmt.Sprintf("%s-%s-%04d", ptID, slug, rand.IntN(10000))
+	listingID = fmt.Sprintf("%s-%s-%04d", ptID, slug, rand.IntN(10000))
 
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO designs (id, designer_id, title, uri, tags) VALUES ($1,$2,$3,$4,$5)`,
 		designID, *designerID, title, uri, tags); err != nil {
-		return "", err
+		return "", false, err
 	}
 	for _, c := range cats {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO design_attributes (design_id, value_id)
 			 SELECT $1, id FROM attribute_values WHERE id=$2 ON CONFLICT DO NOTHING`, designID, c); err != nil {
-			return "", err
+			return "", false, err
 		}
 	}
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO listings (id, design_id, product_type_id, price, sold, rating) VALUES ($1,$2,$3,$4,0,0)`,
 		listingID, designID, ptID, price); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE design_submissions SET published_listing_id=$2 WHERE id=$1`, subID, listingID); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return "", err
+		return "", false, err
 	}
 	s.reindexSearch(ctx, listingID)
-	return listingID, nil
+	return listingID, true, nil
 }
 
 func (s *Server) loadSubmission(ctx context.Context, id string) (*DesignSubmission, error) {
