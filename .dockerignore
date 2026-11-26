@@ -1,0 +1,9 @@
+.git
+bin
+uploads
+.env
+.env.*
+!.env.example
+deploy
+*.log
+*.exe

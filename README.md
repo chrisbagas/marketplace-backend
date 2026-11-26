@@ -122,6 +122,14 @@ internal/mail/         pengirim SMTP (Mailpit di dev, penyedia di produksi) + te
   products.go          katalog
 ```
 
+## Deploy & backup
+
+Produksi/staging jalan sebagai Docker Compose (`caddy` → `web` → `api` → `db` + `backup` malam hari ke R2):
+`deploy/compose.prod.yml`. Runbook lengkap — setup server, deploy satu perintah, staging, rollback, membuat admin
+pertama (`cmd/create-admin`), **restore dari backup**, URL notifikasi Midtrans, SPF/DKIM/DMARC, daftar rahasia —
+ada di [`deploy/README.md`](deploy/README.md). Image API: `Dockerfile` (distroless, berisi `/api`, `/create-admin`,
+`/healthcheck`). Daftar variabel produksi: `deploy/.env.production.example`.
+
 ## Checkout & voucher
 
 - Browser hanya mengirim **apa** yang dibeli (produk, warna, ukuran, qty). Harga satuan, ongkir,

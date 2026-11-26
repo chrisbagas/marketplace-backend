@@ -3,3 +3,6 @@ bin/
 .env
 *.log
 uploads/
+.env.production
+.env.staging
+deploy/caddy/extra/*.caddy

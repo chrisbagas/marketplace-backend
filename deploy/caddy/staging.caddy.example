@@ -1,0 +1,10 @@
+# Serve the karyakita-staging stack from this same caddy. Copy to deploy/caddy/extra/staging.caddy,
+# put your real staging hostname below, then:
+#   docker compose --env-file .env.production -f deploy/compose.prod.yml exec caddy caddy reload --config /etc/caddy/Caddyfile
+staging.example.com {
+	encode zstd gzip
+	reverse_proxy web-staging:3000
+	log {
+		output stdout
+	}
+}

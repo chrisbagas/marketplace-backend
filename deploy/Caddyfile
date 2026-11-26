@@ -1,0 +1,19 @@
+# Caddy obtains and renews Let's Encrypt certificates by itself (needs ports 80/443 open
+# and DNS pointing at this server). For DOMAIN=localhost it uses its own internal CA instead.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Next.js serves the pages and proxies /api/* and /uploads/* to the Go API.
+	reverse_proxy {$WEB_UPSTREAM}
+
+	log {
+		output stdout
+	}
+}
+
+# Extra sites (e.g. staging on the same server): see deploy/caddy/staging.caddy.example
+import /etc/caddy/extra/*.caddy
