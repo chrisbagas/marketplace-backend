@@ -39,6 +39,11 @@ Konfigurasi lewat env var (lihat `.env.example`): `DATABASE_URL`, `PORT` (defaul
   membatalkan link lama.
 - Batas percobaan: login 10×/15 menit per akun & 30×/15 menit per IP; daftar 10×/jam per IP
   (di memori — pindahkan ke Redis bila API lebih dari satu replika).
+- Tulis-tanpa-login dibatasi per IP: `POST /api/track` 300×/15 menit, `POST /api/vitals` 60×/15 menit
+  (lewat batas: tidak disimpan, tetap 200), `GET /api/search` 120×/menit dan `/api/search/suggest`
+  600×/menit (lewat batas: 429).
+- Retensi analitik: job berkala (`RunOrderJobs`) menghapus `track_events`, `web_vitals`, dan
+  `api_metrics` yang lebih tua dari 90 hari (`AnalyticsRetention`). `day_stats` dan `search_terms` tidak disentuh.
 
 Akun demo (password `karyakita123`, atau `DEMO_PASSWORD`; tidak di-set bila `APP_ENV=production`):
 

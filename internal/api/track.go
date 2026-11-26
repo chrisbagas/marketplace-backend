@@ -2,8 +2,10 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // TrackEvent mirrors the frontend's shape: t in epoch milliseconds.
@@ -18,7 +20,20 @@ type TrackEvent struct {
 	Value   *int64 `json:"value,omitempty"`
 }
 
+// Per-IP limits for the unauthenticated analytics writes. Over the limit the
+// insert is skipped but the answer stays 200, so beacons never see an error.
+const (
+	trackLimit   = 300
+	vitalsLimit  = 60
+	analyticsWin = 15 * time.Minute
+	vitalsBatch  = 20 // max samples read from one vitals request
+)
+
 func (s *Server) postTrack(w http.ResponseWriter, r *http.Request) {
+	if !s.limiter.allow("track:"+clientIP(r), trackLimit, analyticsWin) {
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
 	var body struct {
 		Type    string `json:"type"`
 		Session string `json:"session"`
@@ -84,6 +99,10 @@ func (s *Server) recentEvents(ctx context.Context, limit int) ([]TrackEvent, err
 }
 
 func (s *Server) postVitals(w http.ResponseWriter, r *http.Request) {
+	if !s.limiter.allow("vitals:"+clientIP(r), vitalsLimit, analyticsWin) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "received": 0})
+		return
+	}
 	var body []struct {
 		Name  string   `json:"name"`
 		Value *float64 `json:"value"`
@@ -94,6 +113,9 @@ func (s *Server) postVitals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	valid := map[string]bool{"LCP": true, "INP": true, "CLS": true, "TTFB": true}
+	if len(body) > vitalsBatch {
+		body = body[:vitalsBatch]
+	}
 	received := 0
 	for _, v := range body {
 		if !valid[v.Name] || v.Value == nil {
@@ -111,6 +133,26 @@ func (s *Server) postVitals(w http.ResponseWriter, r *http.Request) {
 		received++
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "received": received})
+}
+
+// AnalyticsRetention is how long raw analytics rows are kept. The admin charts
+// read the 14-day day_stats table plus today's live events, so nothing shown
+// there depends on older raw rows; day_stats and search_terms are never purged.
+const AnalyticsRetention = 90 * 24 * time.Hour
+
+// PurgeOldAnalytics deletes track_events, web_vitals and api_metrics rows older
+// than the given age and returns how many rows were removed in total.
+func (s *Server) PurgeOldAnalytics(ctx context.Context, older time.Duration) (int64, error) {
+	var total int64
+	for _, table := range []string{"track_events", "web_vitals", "api_metrics"} {
+		tag, err := s.pool.Exec(ctx,
+			`DELETE FROM `+table+` WHERE created_at < now() - make_interval(secs => $1)`, older.Seconds())
+		if err != nil {
+			return total, fmt.Errorf("%s: %w", table, err)
+		}
+		total += tag.RowsAffected()
+	}
+	return total, nil
 }
 
 func nilIfEmpty(s string) any {

@@ -454,34 +454,58 @@ func safeNext(next string) string {
 // rateLimiter: sliding window sederhana di memori (cukup untuk satu instance;
 // pindahkan ke Redis bila API dijalankan lebih dari satu replika).
 type rateLimiter struct {
-	mu   sync.Mutex
-	hits map[string][]time.Time
+	mu        sync.Mutex
+	hits      map[string]*rateBucket
+	lastPrune time.Time
 }
 
-func newRateLimiter() *rateLimiter { return &rateLimiter{hits: map[string][]time.Time{}} }
+// rateBucket keeps the window next to the hits so pruning expires each key by
+// its own window (keys of different endpoints use different windows).
+type rateBucket struct {
+	times  []time.Time // at most `max` entries: only allowed hits are recorded
+	window time.Duration
+}
+
+func newRateLimiter() *rateLimiter { return &rateLimiter{hits: map[string]*rateBucket{}} }
 
 func (l *rateLimiter) allow(key string, max int, window time.Duration) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
+	l.prune(now)
+	b := l.hits[key]
+	if b == nil {
+		b = &rateBucket{}
+		l.hits[key] = b
+	}
+	b.window = window
 	cutoff := now.Add(-window)
-	recent := l.hits[key][:0]
-	for _, t := range l.hits[key] {
+	recent := b.times[:0]
+	for _, t := range b.times {
 		if t.After(cutoff) {
 			recent = append(recent, t)
 		}
 	}
 	if len(recent) >= max {
-		l.hits[key] = recent
+		b.times = recent
 		return false
 	}
-	l.hits[key] = append(recent, now)
-	if len(l.hits) > 10_000 { // cegah memori tumbuh tanpa batas
-		for k, v := range l.hits {
-			if len(v) == 0 || v[len(v)-1].Before(cutoff) {
-				delete(l.hits, k)
-			}
+	b.times = append(recent, now)
+	return true
+}
+
+// prune drops keys whose newest hit is older than the key's own window, so
+// memory is bounded by the number of clients active within one window. It scans
+// at most once a minute, or every 10 s while the map is unusually large.
+func (l *rateLimiter) prune(now time.Time) {
+	since := now.Sub(l.lastPrune)
+	if since < time.Minute && (len(l.hits) <= 10_000 || since < 10*time.Second) {
+		return
+	}
+	l.lastPrune = now
+	for k, b := range l.hits {
+		if len(b.times) == 0 || b.times[len(b.times)-1].Before(now.Add(-b.window)) {
+			delete(l.hits, k)
 		}
 	}
-	return true
 }

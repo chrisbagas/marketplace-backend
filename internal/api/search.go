@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -655,6 +656,10 @@ func (s *Server) searchListings(ctx context.Context, f searchFilters, withFacets
 }
 
 func (s *Server) getSearch(w http.ResponseWriter, r *http.Request) {
+	if !s.limiter.allow("search:"+clientIP(r), 120, time.Minute) {
+		errJSON(w, http.StatusTooManyRequests, "Terlalu banyak pencarian. Coba lagi sebentar lagi.")
+		return
+	}
 	f := readSearchFilters(r)
 	res, err := s.searchListings(r.Context(), f, true)
 	if err != nil {
@@ -712,6 +717,10 @@ type suggestion struct {
 // getSuggest answers as the shopper types. Without a query it returns the
 // most popular searches.
 func (s *Server) getSuggest(w http.ResponseWriter, r *http.Request) {
+	if !s.limiter.allow("suggest:"+clientIP(r), 600, time.Minute) {
+		errJSON(w, http.StatusTooManyRequests, "Terlalu banyak permintaan. Coba lagi sebentar lagi.")
+		return
+	}
 	ctx := r.Context()
 	out := suggestion{Terms: []string{}, Filters: []SuggestFilter{}, Creators: []SuggestCreator{}, Products: []Product{}}
 	strs := func(sql string, args ...any) ([]string, error) {

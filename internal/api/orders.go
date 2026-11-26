@@ -607,6 +607,12 @@ func (s *Server) RunOrderJobs(ctx context.Context, every time.Duration) {
 		} else if c > 0 {
 			log.Printf("pesanan dibatalkan (tak dibayar): %d", c)
 		}
+		p, err := s.PurgeOldAnalytics(ctx, AnalyticsRetention)
+		if err != nil {
+			log.Printf("hapus analitik lama: %v", err)
+		} else if p > 0 {
+			log.Printf("analitik lama dihapus: %d baris", p)
+		}
 	}
 	run()
 	t := time.NewTicker(every)
