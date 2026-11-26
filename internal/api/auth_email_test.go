@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -60,7 +59,7 @@ func tokenFrom(t *testing.T, m mail.Message, path string) string {
 func emailServer(t *testing.T) (*Server, *fakeMailer, *pgxpool.Pool) {
 	pool := testPool(t)
 	fm := &fakeMailer{sent: make(chan mail.Message, 10)}
-	return NewServer(pool, os.TempDir(), AuthConfig{AppURL: "http://app.test", Mailer: fm}), fm, pool
+	return NewServer(pool, AuthConfig{AppURL: "http://app.test", Mailer: fm}), fm, pool
 }
 
 // call menjalankan satu request JSON; cookies dari respons dikembalikan.

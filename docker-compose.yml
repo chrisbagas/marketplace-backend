@@ -28,5 +28,51 @@ services:
       - "1025:1025"
       - "8025:8025"
 
+  # Penyimpanan file dev (S3-compatible; produksi = Cloudflare R2). Browser
+  # mengunggah langsung ke sini lewat presigned URL, lalu dibaca publik dari
+  # http://localhost:9000/karyakita-files/<key>. Konsol: http://localhost:9001
+  # (login karyakita / karyakita_dev). Image MinIO komunitas sudah tidak
+  # dipublikasikan di Docker Hub / quay.io, jadi dipakai RustFS (Apache-2.0)
+  # yang berbicara S3 dengan port yang sama; server S3 lain juga cocok,
+  # cukup samakan S3_* di .env.
+  s3:
+    image: rustfs/rustfs:latest
+    container_name: karyakita-s3
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: karyakita
+      RUSTFS_SECRET_KEY: karyakita_dev
+      RUSTFS_VOLUMES: /data
+      RUSTFS_CONSOLE_ENABLE: "true"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - karyakita-files:/data
+
+  # Sekali jalan: buat bucket, buka baca-publik (hanya GetObject), dan CORS agar
+  # browser boleh PUT langsung. Aman dijalankan ulang.
+  s3-init:
+    image: amazon/aws-cli:latest
+    container_name: karyakita-s3-init
+    depends_on:
+      - s3
+    restart: "no"
+    environment:
+      AWS_ACCESS_KEY_ID: karyakita
+      AWS_SECRET_ACCESS_KEY: karyakita_dev
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        EP=http://s3:9000
+        B=karyakita-files
+        for i in $$(seq 1 60); do aws --endpoint-url $$EP s3api list-buckets >/dev/null 2>&1 && break; sleep 1; done
+        aws --endpoint-url $$EP s3api head-bucket --bucket $$B 2>/dev/null || aws --endpoint-url $$EP s3api create-bucket --bucket $$B
+        aws --endpoint-url $$EP s3api put-bucket-policy --bucket $$B --policy '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::karyakita-files/*"]}]}'
+        aws --endpoint-url $$EP s3api put-bucket-cors --bucket $$B --cors-configuration '{"CORSRules":[{"AllowedOrigins":["*"],"AllowedMethods":["GET","HEAD","PUT"],"AllowedHeaders":["*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3000}]}'
+        echo "bucket $$B siap"
+
 volumes:
   karyakita-pgdata:
+  karyakita-files:

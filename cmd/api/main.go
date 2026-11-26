@@ -14,6 +14,7 @@ import (
 	"karyakita/api/internal/envfile"
 	"karyakita/api/internal/mail"
 	"karyakita/api/internal/midtrans"
+	"karyakita/api/internal/s3"
 )
 
 func main() {
@@ -61,14 +62,6 @@ func main() {
 		}
 	}
 
-	uploadDir := os.Getenv("UPLOAD_DIR")
-	if uploadDir == "" {
-		uploadDir = "uploads"
-	}
-	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
-		log.Fatalf("folder upload: %v", err)
-	}
-
 	authCfg := api.AuthConfig{
 		CookieSecure: production || os.Getenv("COOKIE_SECURE") == "true",
 		AppURL:       envOr("APP_URL", "http://localhost:3000"),
@@ -83,8 +76,17 @@ func main() {
 		log.Printf("login Google aktif (redirect → %s)", authCfg.Google.RedirectURL)
 	}
 
-	log.Printf("KaryaKita API siap di http://localhost:%s (db ok, skema termigrasi, upload → %s)", port, uploadDir)
-	srv := api.NewServer(pool, uploadDir, authCfg)
+	store, err := s3.FromEnv(production)
+	if err != nil {
+		log.Fatalf("penyimpanan file: %v", err)
+	}
+	if store == nil {
+		log.Printf("PERINGATAN: S3_* belum diisi — unggah file dinonaktifkan")
+	}
+
+	log.Printf("KaryaKita API siap di http://localhost:%s (db ok, skema termigrasi)", port)
+	srv := api.NewServer(pool, authCfg)
+	srv.SetFiles(store)
 	srv.SetPayments(newPayments(production))
 	// pesanan "tiba" selesai otomatis 2 hari setelah paket sampai (dicek tiap 10 menit)
 	go srv.RunOrderJobs(ctx, 10*time.Minute)

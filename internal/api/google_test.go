@@ -63,7 +63,7 @@ func fakeGoogle(t *testing.T, info googleInfo) {
 }
 
 func googleServer(pool *pgxpool.Pool) *Server {
-	return NewServer(pool, os.TempDir(), AuthConfig{Google: GoogleConfig{
+	return NewServer(pool, AuthConfig{Google: GoogleConfig{
 		ClientID: "klien", ClientSecret: "rahasia", RedirectURL: "http://localhost:3000/api/auth/google/callback",
 	}})
 }
