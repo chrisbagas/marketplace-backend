@@ -2,11 +2,16 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net/http"
 	"regexp"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
+
+	"karyakita/api/internal/db"
 )
 
 // DesignSubmission matches the frontend shape (t in epoch ms).
@@ -23,19 +28,21 @@ type DesignSubmission struct {
 	Note       string   `json:"note,omitempty"`
 	Tags       []string `json:"tags"`
 	Attributes []string `json:"attributes"` // attribute value ids (tema, gaya, acara)
+	WidthCm    float64  `json:"widthCm"`    // print width in cm
+	OffsetYCm  float64  `json:"offsetYCm"`  // vertical shift from the print-area centre; + = lower
 	ListingID  string   `json:"listingId,omitempty"`
 }
 
 const submissionCols = `
 	SELECT id, (extract(epoch FROM created_at)*1000)::bigint, title, designer_name,
 	       product_type_id, color_id, price, uri, status, COALESCE(note,''),
-	       tags, attribute_ids, COALESCE(published_listing_id,'')
+	       tags, attribute_ids, width_cm, offset_y_cm, COALESCE(published_listing_id,'')
 	FROM design_submissions`
 
 func scanSubmission(row interface{ Scan(...any) error }) (DesignSubmission, error) {
 	var d DesignSubmission
 	err := row.Scan(&d.ID, &d.T, &d.Title, &d.Designer, &d.Type, &d.Color, &d.Price,
-		&d.URI, &d.Status, &d.Note, &d.Tags, &d.Attributes, &d.ListingID)
+		&d.URI, &d.Status, &d.Note, &d.Tags, &d.Attributes, &d.WidthCm, &d.OffsetYCm, &d.ListingID)
 	return d, err
 }
 
@@ -108,6 +115,8 @@ func (s *Server) postDesign(w http.ResponseWriter, r *http.Request) {
 		URI        string   `json:"uri"`
 		Tags       []string `json:"tags"`
 		Attributes []string `json:"attributes"`
+		WidthCm    *float64 `json:"widthCm"` // omitted = Studio default for the product type
+		OffsetYCm  float64  `json:"offsetYCm"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		errJSON(w, http.StatusRequestEntityTooLarge, "Ukuran gambar terlalu besar (maks ±1 MB)")
@@ -146,6 +155,24 @@ func (s *Server) postDesign(w http.ResponseWriter, r *http.Request) {
 	if body.Color == "" {
 		body.Color = "putih"
 	}
+	maxW, maxH, err := printLimits(r.Context(), s.pool, body.Type)
+	if errors.Is(err, pgx.ErrNoRows) {
+		errJSON(w, http.StatusBadRequest, "Jenis produk tidak valid")
+		return
+	}
+	if err != nil {
+		errJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	width := db.DefaultPrintWidthCm(maxW)
+	if body.WidthCm != nil {
+		width = *body.WidthCm
+	}
+	width, offset, err := checkPrintSpec(width, body.OffsetYCm, maxW, maxH)
+	if err != nil {
+		errJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	ctx := r.Context()
 	attrs, err := s.cleanAttributes(ctx, body.Attributes)
@@ -162,10 +189,11 @@ func (s *Server) postDesign(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if _, err := s.pool.Exec(ctx,
-		`INSERT INTO design_submissions (id, designer_id, designer_name, title, product_type_id, color_id, price, uri, tags, attribute_ids)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		`INSERT INTO design_submissions (id, designer_id, designer_name, title, product_type_id, color_id, price, uri, tags, attribute_ids,
+		                                width_cm, offset_y_cm)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 		id, designerID, body.Designer, body.Title, body.Type, body.Color, body.Price, body.URI,
-		cleanTags(body.Tags), attrs); err != nil {
+		cleanTags(body.Tags), attrs, width, offset); err != nil {
 		errJSON(w, http.StatusBadRequest, "Bad request")
 		return
 	}
@@ -287,10 +315,11 @@ func (s *Server) publishSubmission(ctx context.Context, subID string) (string, e
 	var title, ptID, uri string
 	var price int
 	var tags, cats []string
+	var widthCm, offsetYCm float64
 	if err := tx.QueryRow(ctx, `
-		SELECT designer_id, published_listing_id, title, product_type_id, uri, price, tags, attribute_ids
+		SELECT designer_id, published_listing_id, title, product_type_id, uri, price, tags, attribute_ids, width_cm, offset_y_cm
 		FROM design_submissions WHERE id=$1 FOR UPDATE`, subID).
-		Scan(&designerID, &published, &title, &ptID, &uri, &price, &tags, &cats); err != nil {
+		Scan(&designerID, &published, &title, &ptID, &uri, &price, &tags, &cats, &widthCm, &offsetYCm); err != nil {
 		return "", err
 	}
 	if published != nil && *published != "" {
@@ -317,8 +346,8 @@ func (s *Server) publishSubmission(ctx context.Context, subID string) (string, e
 		}
 	}
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO listings (id, design_id, product_type_id, price, sold, rating) VALUES ($1,$2,$3,$4,0,0)`,
-		listingID, designID, ptID, price); err != nil {
+		`INSERT INTO listings (id, design_id, product_type_id, price, sold, rating, width_cm, offset_y_cm) VALUES ($1,$2,$3,$4,0,0,$5,$6)`,
+		listingID, designID, ptID, price, widthCm, offsetYCm); err != nil {
 		return "", err
 	}
 	if _, err := tx.Exec(ctx,

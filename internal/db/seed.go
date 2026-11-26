@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"net/url"
 	"strings"
@@ -62,6 +63,10 @@ type seedCatalog struct {
 var printAreas = map[string][2]float64{
 	"kaos": {30, 40}, "hoodie": {28, 30}, "mug": {9, 8.5}, "totebag": {25, 30},
 }
+
+// DefaultPrintWidthCm is the Studio default print width for a product type
+// (80% of the print area, rounded) — same rule as the backfill in migration 016.
+func DefaultPrintWidthCm(maxW float64) float64 { return math.Round(maxW * 0.8) }
 
 // AvatarURI: foto profil bawaan — inisial di atas warna khas kreator.
 // Sama dengan backfill di migrations/003 dan lib/avatar.ts di frontend.
@@ -196,8 +201,9 @@ func SeedIfEmpty(ctx context.Context, pool *pgxpool.Pool) error {
 			badge = l.Badge
 		}
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO listings (id, design_id, product_type_id, price, sold, rating, badge) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-			l.ID, l.DesignID, l.Type, l.Price, l.Sold, l.Rating, badge); err != nil {
+			`INSERT INTO listings (id, design_id, product_type_id, price, sold, rating, badge, width_cm, offset_y_cm)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0)`,
+			l.ID, l.DesignID, l.Type, l.Price, l.Sold, l.Rating, badge, DefaultPrintWidthCm(printAreas[l.Type][0])); err != nil {
 			return err
 		}
 	}
@@ -350,8 +356,10 @@ func seedOrders(ctx context.Context, tx pgx.Tx, cat *seedCatalog, rng *rand.Rand
 
 		var itemID int64
 		if err := tx.QueryRow(ctx,
-			`INSERT INTO order_items (order_id, listing_id, title, type, color, size, qty, unit_price, base_price, production_cost, producer_id)
-			 SELECT $1,$2,$3,$4,$5,$6,$7,$8, t.base_price, t.production_cost, t.producer_id FROM product_types t WHERE t.id = $4
+			`INSERT INTO order_items (order_id, listing_id, title, type, color, size, qty, unit_price, base_price, production_cost, producer_id,
+			                         width_cm, offset_y_cm)
+			 SELECT $1,$2,$3,$4,$5,$6,$7,$8, t.base_price, t.production_cost, t.producer_id, li.width_cm, li.offset_y_cm
+			 FROM product_types t JOIN listings li ON li.id = $2 WHERE t.id = $4
 			 RETURNING id`,
 			id, l.ID, title, l.Type, pt.ColorIds[0], pt.Sizes[0], qty, l.Price).Scan(&itemID); err != nil {
 			return err

@@ -141,6 +141,8 @@ erDiagram
         numeric rating
         text badge "nullable"
         bool active
+        numeric width_cm "lebar cetak (cm), 0 < w <= print_max_w_cm"
+        numeric offset_y_cm "geser vertikal dari TENGAH area cetak: + ke bawah, - ke atas"
     }
     orders {
         text id PK "KK-YYMMDD-nnnn"
@@ -181,6 +183,8 @@ erDiagram
         int base_price "snapshot saat checkout"
         int production_cost "snapshot saat checkout"
         text producer_id FK "snapshot saat checkout"
+        numeric width_cm "snapshot lebar cetak (cm) untuk vendor"
+        numeric offset_y_cm "snapshot geser vertikal dari tengah area cetak"
     }
     payments {
         bigint id PK
@@ -220,6 +224,8 @@ erDiagram
         text uri
         submission_status status "review | disetujui | ditolak"
         text note "catatan moderasi"
+        numeric width_cm "lebar cetak (cm), disalin ke listing saat disetujui"
+        numeric offset_y_cm "geser vertikal dari tengah area cetak"
         timestamptz created_at
     }
     royalties {
@@ -374,6 +380,14 @@ erDiagram
 - **Uang = integer Rupiah.** Tidak ada pecahan sen di IDR; menghindari error floating point.
 - **Snapshot di `order_items`.** Judul, harga, dan gambar desain disalin saat checkout, jadi
   pesanan lama tetap benar walau listing diubah/dihapus (`listing_id` nullable `ON DELETE` aman).
+- **Print spec** (migration 016): `design_submissions` → `listings` → `order_items` carry
+  `width_cm` / `offset_y_cm` (offset is measured from the centre of the print area; positive =
+  lower). The order item is a snapshot, so the vendor sees the size chosen at checkout even if
+  the listing changes. Existing rows were backfilled with the Studio default per product type
+  (80% of `print_max_w_cm`, rounded: kaos 24, hoodie 22, mug 7, totebag 20 cm, offset 0) —
+  defaults, not measurements. Custom designs snapshot the values the buyer's cart carries
+  (validated against the print area); `order_items` has no column default so every insert must
+  state the spec.
 - **`payments` terpisah dari `orders`.** Siap untuk retry pembayaran/metode ganda, dan meniru
   webhook gateway: `PATCH {action:"pay"}` = notifikasi Midtrans/Xendit. Idempoten — bayar dua
   kali tidak menggandakan royalti (`ON CONFLICT (order_item_id) DO NOTHING`).

@@ -30,6 +30,8 @@ type Product struct {
 	Category       string   `json:"category"`   // product category id (Pakaian, ...)
 	Attributes     []string `json:"attributes"` // attribute value ids (tema, gaya, acara)
 	Active         bool     `json:"active"`
+	WidthCm        float64  `json:"widthCm"`   // print width in cm
+	OffsetYCm      float64  `json:"offsetYCm"` // vertical shift from print-area centre; + = lower
 }
 
 // effectiveColors: a listing's own colour subset, or every colour of its product type.
@@ -44,7 +46,7 @@ const productCols = `
 	       ` + effectiveColors + `,
 	       COALESCE(pt.category_id, ''),
 	       (SELECT COALESCE(array_agg(value_id), '{}') FROM design_attributes WHERE design_id = d.id),
-	       l.active`
+	       l.active, l.width_cm, l.offset_y_cm`
 
 const productJoins = `
 	FROM listings l
@@ -59,7 +61,7 @@ func scanProduct(row pgx.Row) (Product, error) {
 	var p Product
 	err := row.Scan(&p.ID, &p.DesignID, &p.Type, &p.Price, &p.Sold, &p.Rating, &p.Badge,
 		&p.Title, &p.DesignURI, &p.DesignerName, &p.DesignerID, &p.DesignerAvatar, &p.TypeLabel, &p.Tags,
-		&p.Sizes, &p.ColorIds, &p.Category, &p.Attributes, &p.Active)
+		&p.Sizes, &p.ColorIds, &p.Category, &p.Attributes, &p.Active, &p.WidthCm, &p.OffsetYCm)
 	return p, err
 }
 

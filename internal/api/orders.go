@@ -29,6 +29,10 @@ type CartLine struct {
 	Qty       int    `json:"qty"`
 	Price     int    `json:"price"`
 	DesignURI string `json:"designUri,omitempty"`
+	// Print spec (cm). Output: snapshot of what the vendor prints. Input: only
+	// read for custom designs (a catalog line takes it from its listing).
+	WidthCm   float64 `json:"widthCm"`
+	OffsetYCm float64 `json:"offsetYCm"`
 }
 
 type Customer struct {
@@ -193,10 +197,11 @@ func (s *Server) postOrder(w http.ResponseWriter, r *http.Request) {
 	for _, it := range quote.Items {
 		tag, err := tx.Exec(ctx, `
 			INSERT INTO order_items (order_id, listing_id, title, type, color, size, qty, unit_price, design_uri,
-			                         base_price, production_cost, producer_id)
-			SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9, pt.base_price, pt.production_cost, pt.producer_id
+			                         base_price, production_cost, producer_id, width_cm, offset_y_cm)
+			SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9, pt.base_price, pt.production_cost, pt.producer_id, $10::numeric, $11::numeric
 			FROM product_types pt WHERE pt.id = $4`,
-			id, nilIfEmpty(it.listingID), it.Title, it.Type, it.Color, it.Size, it.Qty, it.Price, nilIfEmpty(it.DesignURI))
+			id, nilIfEmpty(it.listingID), it.Title, it.Type, it.Color, it.Size, it.Qty, it.Price, nilIfEmpty(it.DesignURI),
+			it.WidthCm, it.OffsetYCm)
 		if err == nil && tag.RowsAffected() != 1 {
 			err = fmt.Errorf("jenis produk %q tidak ada", it.Type)
 		}
@@ -864,7 +869,7 @@ func (s *Server) loadOrdersPage(ctx context.Context, where string, args []any, l
 	}
 
 	itemRows, err := s.pool.Query(ctx, `
-		SELECT order_id, COALESCE(listing_id,''), title, type, color, size, qty, unit_price, COALESCE(design_uri,'')
+		SELECT order_id, COALESCE(listing_id,''), title, type, color, size, qty, unit_price, COALESCE(design_uri,''), width_cm, offset_y_cm
 		FROM order_items WHERE order_id = ANY($1) ORDER BY id`, ids)
 	if err != nil {
 		return nil, err
@@ -873,7 +878,7 @@ func (s *Server) loadOrdersPage(ctx context.Context, where string, args []any, l
 	for itemRows.Next() {
 		var oid string
 		var it CartLine
-		if err := itemRows.Scan(&oid, &it.ProductID, &it.Title, &it.Type, &it.Color, &it.Size, &it.Qty, &it.Price, &it.DesignURI); err != nil {
+		if err := itemRows.Scan(&oid, &it.ProductID, &it.Title, &it.Type, &it.Color, &it.Size, &it.Qty, &it.Price, &it.DesignURI, &it.WidthCm, &it.OffsetYCm); err != nil {
 			return nil, err
 		}
 		i := index[oid]

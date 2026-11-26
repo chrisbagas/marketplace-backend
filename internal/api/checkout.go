@@ -12,6 +12,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"karyakita/api/internal/db"
 )
 
 // Checkout: harga, ongkir, dan voucher SELALU dihitung di server. Browser
@@ -50,16 +52,18 @@ func courierByID(id string) (Courier, bool) {
 }
 
 type QuoteLine struct {
-	ProductID string `json:"productId"`
-	Title     string `json:"title"`
-	Type      string `json:"type"`
-	Color     string `json:"color"`
-	Size      string `json:"size"`
-	Qty       int    `json:"qty"`
-	Price     int    `json:"price"` // harga satuan dari database
-	LineTotal int    `json:"lineTotal"`
-	DesignURI string `json:"designUri,omitempty"`
-	listingID string // kosong = desain custom (tanpa royalti)
+	ProductID string  `json:"productId"`
+	Title     string  `json:"title"`
+	Type      string  `json:"type"`
+	Color     string  `json:"color"`
+	Size      string  `json:"size"`
+	Qty       int     `json:"qty"`
+	Price     int     `json:"price"` // harga satuan dari database
+	LineTotal int     `json:"lineTotal"`
+	DesignURI string  `json:"designUri,omitempty"`
+	WidthCm   float64 `json:"widthCm"`   // print spec snapshot (cm)
+	OffsetYCm float64 `json:"offsetYCm"` // vertical shift from print-area centre; + = lower
+	listingID string  // kosong = desain custom (tanpa royalti)
 }
 
 type VoucherInfo struct {
@@ -181,6 +185,7 @@ func quoteCatalogLine(ctx context.Context, q querier, l CartLine) (QuoteLine, er
 	return QuoteLine{
 		ProductID: p.ID, Title: p.Title, Type: p.Type, Color: l.Color, Size: l.Size,
 		Qty: l.Qty, Price: p.Price, DesignURI: p.DesignURI, listingID: p.ID,
+		WidthCm: p.WidthCm, OffsetYCm: p.OffsetYCm,
 	}, nil
 }
 
@@ -188,12 +193,13 @@ func quoteCatalogLine(ctx context.Context, q querier, l CartLine) (QuoteLine, er
 func quoteCustomLine(ctx context.Context, q querier, l CartLine) (QuoteLine, error) {
 	var label string
 	var base int
+	var maxW, maxH float64
 	var colorOK, sizeOK bool
 	err := q.QueryRow(ctx, `
-		SELECT pt.label, pt.base_price,
+		SELECT pt.label, pt.base_price, pt.print_max_w_cm, pt.print_max_h_cm,
 		       EXISTS (SELECT 1 FROM product_type_colors WHERE product_type_id = pt.id AND color_id = $2),
 		       EXISTS (SELECT 1 FROM product_type_sizes  WHERE product_type_id = pt.id AND size = $3)
-		FROM product_types pt WHERE pt.id = $1`, l.Type, l.Color, l.Size).Scan(&label, &base, &colorOK, &sizeOK)
+		FROM product_types pt WHERE pt.id = $1`, l.Type, l.Color, l.Size).Scan(&label, &base, &maxW, &maxH, &colorOK, &sizeOK)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return QuoteLine{}, checkoutError("Jenis produk custom tidak valid")
 	}
@@ -202,6 +208,16 @@ func quoteCustomLine(ctx context.Context, q querier, l CartLine) (QuoteLine, err
 	}
 	if !colorOK || !sizeOK {
 		return QuoteLine{}, checkoutError("Warna atau ukuran produk custom tidak tersedia")
+	}
+	// the buyer chose the print size in Studio; carts saved before the print spec
+	// existed have none, so fall back to the product default
+	width := l.WidthCm
+	if width == 0 {
+		width = db.DefaultPrintWidthCm(maxW)
+	}
+	width, offset, err := checkPrintSpec(width, l.OffsetYCm, maxW, maxH)
+	if err != nil {
+		return QuoteLine{}, err
 	}
 	uri := l.DesignURI
 	if !(strings.HasPrefix(uri, "/uploads/") || strings.HasPrefix(uri, "data:image/")) || len(uri) > 1_500_000 {
@@ -213,7 +229,7 @@ func quoteCustomLine(ctx context.Context, q querier, l CartLine) (QuoteLine, err
 	}
 	return QuoteLine{
 		ProductID: l.ProductID, Title: truncate(title, 100), Type: l.Type, Color: l.Color, Size: l.Size,
-		Qty: l.Qty, Price: base + customFee, DesignURI: uri,
+		Qty: l.Qty, Price: base + customFee, DesignURI: uri, WidthCm: width, OffsetYCm: offset,
 	}, nil
 }
 
