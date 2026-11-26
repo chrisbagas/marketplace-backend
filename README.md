@@ -48,6 +48,10 @@ Akun demo (password `karyakita123`, atau `DEMO_PASSWORD`; tidak di-set bila `APP
 | `raka` | kreator (Raka Wijaya) |
 | `demo` | pelanggan |
 
+Dengan `APP_ENV=production`, seed pertama hanya mengisi data referensi (tipe produk, warna, ukuran);
+tidak ada akun demo, kreator, desain, listing, pesanan, ulasan, maupun analitik. Kategori, atribut,
+sinonim, dan produsen `vendor-utama` berasal dari migrasi. Akun admin pertama dibuat manual lewat SQL.
+
 ## Endpoint
 
 | Endpoint | Method | Fungsi |

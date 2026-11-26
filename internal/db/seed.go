@@ -98,10 +98,25 @@ var seedTypeCategories = map[string]struct {
 	"kaos": {"pakaian", 1}, "hoodie": {"pakaian", 2}, "totebag": {"tas", 3}, "mug": {"rumah", 4},
 }
 
-// SeedIfEmpty populates catalog + 14 days of demo analytics on first run.
-func SeedIfEmpty(ctx context.Context, pool *pgxpool.Pool) error {
+// SeedIfEmpty populates the database on first run.
+//
+// Development: reference data + the whole demo catalog, demo users and 14 days
+// of demo orders/analytics (runs while `listings` is empty).
+//
+// Production: reference data only (product types, colors, sizes) — never
+// designers, designs, listings, orders, reviews, analytics or demo users — and
+// the three demo vouchers from migration 009 are deactivated.
+// Categories, attributes, synonyms and the `vendor-utama` producer come from
+// migrations. The emptiness check is `product_types` (not `listings`, which is
+// legitimately empty in a fresh production DB), so reference data is seeded
+// once and later edits/deletions by an admin are never overwritten.
+func SeedIfEmpty(ctx context.Context, pool *pgxpool.Pool, production bool) error {
 	var n int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM listings`).Scan(&n); err != nil {
+	table := "listings"
+	if production {
+		table = "product_types"
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM `+table).Scan(&n); err != nil {
 		return err
 	}
 	if n > 0 {
@@ -118,6 +133,19 @@ func SeedIfEmpty(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
+
+	if production {
+		if err := seedReference(ctx, tx, &cat); err != nil {
+			return err
+		}
+		// Migration 009 ships three demo vouchers; keep them (an admin may
+		// re-enable) but never leave them live in production.
+		if _, err := tx.Exec(ctx,
+			`UPDATE vouchers SET active = false WHERE code IN ('KARYAKITA10','HEMAT25','GRATISONGKIR')`); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
 
 	rng := rand.New(rand.NewPCG(2026, 708)) // deterministic demo data
 	now := time.Now()
@@ -138,30 +166,8 @@ func SeedIfEmpty(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 
 	// --- katalog ---
-	for id, c := range cat.Colors {
-		if _, err := tx.Exec(ctx, `INSERT INTO colors (id, label, hex) VALUES ($1,$2,$3)`, id, c.Label, c.Hex); err != nil {
-			return err
-		}
-	}
-	for id, pt := range cat.ProductTypes {
-		area := printAreas[id]
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO product_types (id, label, base_price, print_max_w_cm, print_max_h_cm, category_id, sort, producer_id, production_cost)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,'vendor-utama',LEAST($3::int, $8::int))`,
-			id, pt.Label, pt.Base, area[0], area[1], nilIfBlank(seedTypeCategories[id].category), seedTypeCategories[id].sort,
-			PlaceholderProductionCost[id]); err != nil {
-			return err
-		}
-		for i, s := range pt.Sizes {
-			if _, err := tx.Exec(ctx, `INSERT INTO product_type_sizes (product_type_id, size, sort) VALUES ($1,$2,$3)`, id, s, i); err != nil {
-				return err
-			}
-		}
-		for i, c := range pt.ColorIds {
-			if _, err := tx.Exec(ctx, `INSERT INTO product_type_colors (product_type_id, color_id, sort) VALUES ($1,$2,$3)`, id, c, i); err != nil {
-				return err
-			}
-		}
+	if err := seedReference(ctx, tx, &cat); err != nil {
+		return err
 	}
 	for _, d := range cat.Designers {
 		userID := any(nil)
@@ -291,6 +297,39 @@ func SeedIfEmpty(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 
 	return tx.Commit(ctx)
+}
+
+// seedReference inserts what ordering/checkout needs to work in every
+// environment: colors, product types (price, print area, category, producer,
+// production cost) and their sizes/colors. Idempotent (ON CONFLICT DO NOTHING).
+func seedReference(ctx context.Context, tx pgx.Tx, cat *seedCatalog) error {
+	for id, c := range cat.Colors {
+		if _, err := tx.Exec(ctx, `INSERT INTO colors (id, label, hex) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, id, c.Label, c.Hex); err != nil {
+			return err
+		}
+	}
+	for id, pt := range cat.ProductTypes {
+		area := printAreas[id]
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO product_types (id, label, base_price, print_max_w_cm, print_max_h_cm, category_id, sort, producer_id, production_cost)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,'vendor-utama',LEAST($3::int, $8::int))
+			 ON CONFLICT DO NOTHING`,
+			id, pt.Label, pt.Base, area[0], area[1], nilIfBlank(seedTypeCategories[id].category), seedTypeCategories[id].sort,
+			PlaceholderProductionCost[id]); err != nil {
+			return err
+		}
+		for i, s := range pt.Sizes {
+			if _, err := tx.Exec(ctx, `INSERT INTO product_type_sizes (product_type_id, size, sort) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, id, s, i); err != nil {
+				return err
+			}
+		}
+		for i, c := range pt.ColorIds {
+			if _, err := tx.Exec(ctx, `INSERT INTO product_type_colors (product_type_id, color_id, sort) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, id, c, i); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func seedOrders(ctx context.Context, tx pgx.Tx, cat *seedCatalog, rng *rand.Rand, now time.Time) error {
