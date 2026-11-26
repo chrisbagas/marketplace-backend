@@ -179,3 +179,13 @@ menunggu-pembayaran → dibayar → produksi → dikirim → tiba → selesai
 - **Biaya**: ditentukan Midtrans per kanal (QRIS dan VA paling murah; e-wallet sekitar 2%). Matikan
   kanal yang tidak diperlukan di dashboard Midtrans atau lewat `MIDTRANS_ENABLED_PAYMENTS`.
 - **Belum ada**: refund / chargeback (notifikasinya hanya dicatat) dan rekonsiliasi pencairan dana.
+
+## CI
+
+`.github/workflows/ci.yml` jalan di setiap PR ke `staging`/`main` dan di push ke `staging`:
+`go vet ./...`, lalu API dijalankan sekali terhadap service `postgres:16-alpine` kosong (migrasi + seed),
+lalu `go test ./...` dengan `TEST_DATABASE_URL`. Job gagal bila ada tes yang `SKIP` — tes database
+yang terlewati karena database tak terjangkau tidak boleh lolos diam-diam.
+
+Reproduksi lokal: buat database kosong, `export DATABASE_URL=... TEST_DATABASE_URL=...` (sama),
+`go run ./cmd/api` sampai `/healthz` hijau, hentikan, lalu `go test -count=1 -v ./...`.
