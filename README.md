@@ -69,6 +69,7 @@ peran salah → `403`.
 | `/api/auth/password/reset` | POST | publik | `{token, password}` → password baru + sesi baru |
 | `/api/auth/google/start`, `/callback` | GET | publik | Alur OAuth Google (redirect) |
 | `/api/products`, `/api/products/{id}` | GET | publik | Katalog (daftar tanpa halaman + detail) |
+| `/api/designers/{id}` | GET | publik | Profil publik kreator (nama, kota, bio, avatar, jumlah produk aktif, total terjual); tanpa data pribadi/bank |
 | `/api/search` | GET | publik | Pencarian katalog: `q`, `type`, `category`, `attr`, `color`, `min`, `max`, `designer`, `sort`, `page`, `limit` → produk + jumlah per filter |
 | `/api/search/suggest`, `/api/taxonomy` | GET | publik | Saran saat mengetik · kategori, atribut & warna beserta jumlah produknya |
 | `/api/search/insights`, `/api/search/synonyms(/{id})`, `/api/attributes/{id}/values`, `/api/attribute-values/{id}` | GET/POST/PATCH/DELETE | admin | Pencarian tanpa hasil, sinonim, pilihan atribut |

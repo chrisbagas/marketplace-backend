@@ -90,6 +90,7 @@ func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
 	s.route("PATCH /api/designs", "/api/designs", s.authed(s.patchDesign, admin))
 	s.route("GET /api/products", "/api/products", s.getProducts)
 	s.route("GET /api/products/{id}", "/api/products", s.getProduct)
+	s.route("GET /api/designers/{id}", "/api/designers", s.getDesigner)
 	s.route("GET /api/search", "/api/search", s.getSearch)
 	s.route("GET /api/search/suggest", "/api/search/suggest", s.getSuggest)
 	s.route("GET /api/taxonomy", "/api/taxonomy", s.getTaxonomy)
