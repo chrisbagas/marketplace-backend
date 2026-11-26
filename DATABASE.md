@@ -3,6 +3,10 @@
 Database: **PostgreSQL 16** · skema penuh di [`internal/db/schema.sql`](internal/db/schema.sql)
 (dimigrasikan otomatis saat API pertama kali start, dicatat di `schema_migrations`).
 
+Versi migrasi = prefiks angka nama file (`015_search.sql` → versi 15; `schema.sql` = versi 1), bukan urutan
+posisinya. Saat start, API menjalankan setiap migrasi yang versinya belum ada di `schema_migrations`, urut naik.
+Dua file dengan prefiks sama, atau file tanpa prefiks angka, membuat start gagal.
+
 36 tabel dalam 7 kelompok:
 
 | Kelompok | Tabel |
