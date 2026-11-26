@@ -77,17 +77,25 @@ func AvatarURI(hue int, name string) string {
 	return "data:image/svg+xml," + url.PathEscape(svg)
 }
 
-// seedDesignCategories: kategori desain seed — sama dengan backfill di
-// migrations/002 (yang hanya berlaku untuk DB lama).
-var seedDesignCategories = map[string][]string{
-	"anak-senja":      {"senja", "tipografi"},
+// seedDesignAttributes: tema/gaya of the seed designs (attribute value ids) —
+// same as the backfills in migrations/002 + 015, which only reach old DBs.
+var seedDesignAttributes = map[string][]string{
+	"anak-senja":      {"senja", "tipografi", "retro"},
 	"kopi-dulu":       {"kopi", "tipografi"},
-	"kawung-modern":   {"batik"},
-	"komodo-trail":    {"alam"},
-	"ombak-nusantara": {"laut", "alam"},
-	"jaga-laut":       {"laut", "alam"},
-	"rendang-love":    {"kuliner", "tipografi"},
-	"tropis":          {"alam"},
+	"kawung-modern":   {"batik", "minimalis"},
+	"komodo-trail":    {"alam", "wisata", "hewan"},
+	"ombak-nusantara": {"laut", "alam", "ilustrasi"},
+	"jaga-laut":       {"laut", "alam", "hewan"},
+	"rendang-love":    {"kuliner", "tipografi", "lucu"},
+	"tropis":          {"alam", "ilustrasi"},
+}
+
+// seedTypeCategories: product type -> category + display order (mirrors migration 015).
+var seedTypeCategories = map[string]struct {
+	category string
+	sort     int
+}{
+	"kaos": {"pakaian", 1}, "hoodie": {"pakaian", 2}, "totebag": {"tas", 3}, "mug": {"rumah", 4},
 }
 
 // SeedIfEmpty populates catalog + 14 days of demo analytics on first run.
@@ -138,8 +146,10 @@ func SeedIfEmpty(ctx context.Context, pool *pgxpool.Pool) error {
 	for id, pt := range cat.ProductTypes {
 		area := printAreas[id]
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO product_types (id, label, base_price, print_max_w_cm, print_max_h_cm) VALUES ($1,$2,$3,$4,$5)`,
-			id, pt.Label, pt.Base, area[0], area[1]); err != nil {
+			`INSERT INTO product_types (id, label, base_price, print_max_w_cm, print_max_h_cm, category_id, sort, producer_id, production_cost)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,'vendor-utama',LEAST($3::int, $8::int))`,
+			id, pt.Label, pt.Base, area[0], area[1], nilIfBlank(seedTypeCategories[id].category), seedTypeCategories[id].sort,
+			PlaceholderProductionCost[id]); err != nil {
 			return err
 		}
 		for i, s := range pt.Sizes {
@@ -171,11 +181,11 @@ func SeedIfEmpty(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 	}
-	for design, cats := range seedDesignCategories {
-		for _, c := range cats {
+	for design, values := range seedDesignAttributes {
+		for _, v := range values {
 			if _, err := tx.Exec(ctx,
-				`INSERT INTO design_categories (design_id, category_id)
-				 SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM designs WHERE id = $1)`, design, c); err != nil {
+				`INSERT INTO design_attributes (design_id, value_id)
+				 SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM designs WHERE id = $1)`, design, v); err != nil {
 				return err
 			}
 		}
@@ -280,30 +290,6 @@ func SeedIfEmpty(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 
-	// --- contoh payout kreator ---
-	payouts := []struct {
-		designer string
-		amount   int
-		status   string
-		daysAgo  int
-	}{
-		{"d-raka", 1250000, "dibayar", 21},
-		{"d-raka", 890000, "diminta", 1},
-		{"d-tiara", 640000, "dibayar", 14},
-	}
-	for _, p := range payouts {
-		reqAt := now.Add(-time.Duration(p.daysAgo) * day)
-		paidAt := any(nil)
-		if p.status == "dibayar" {
-			paidAt = reqAt.Add(2 * day)
-		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO payouts (designer_id, amount, status, requested_at, paid_at) VALUES ($1,$2,$3,$4,$5)`,
-			p.designer, p.amount, p.status, reqAt, paidAt); err != nil {
-			return err
-		}
-	}
-
 	return tx.Commit(ctx)
 }
 
@@ -318,10 +304,8 @@ func seedOrders(ctx context.Context, tx pgx.Tx, cat *seedCatalog, rng *rand.Rand
 	statuses := []string{"dibayar", "produksi", "produksi", "dikirim", "tiba", "selesai"}
 
 	designByID := map[string]string{}
-	designerByDesign := map[string]string{}
 	for _, d := range cat.Designs {
 		designByID[d.ID] = d.Title
-		designerByDesign[d.ID] = d.DesignerID
 	}
 
 	for i := 0; i < 12; i++ {
@@ -366,16 +350,18 @@ func seedOrders(ctx context.Context, tx pgx.Tx, cat *seedCatalog, rng *rand.Rand
 
 		var itemID int64
 		if err := tx.QueryRow(ctx,
-			`INSERT INTO order_items (order_id, listing_id, title, type, color, size, qty, unit_price)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+			`INSERT INTO order_items (order_id, listing_id, title, type, color, size, qty, unit_price, base_price, production_cost, producer_id)
+			 SELECT $1,$2,$3,$4,$5,$6,$7,$8, t.base_price, t.production_cost, t.producer_id FROM product_types t WHERE t.id = $4
+			 RETURNING id`,
 			id, l.ID, title, l.Type, pt.ColorIds[0], pt.Sizes[0], qty, l.Price).Scan(&itemID); err != nil {
 			return err
 		}
 
 		method := methods[rng.IntN(len(methods))]
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO payments (order_id, method, status, ref, amount, paid_at) VALUES ($1,$2,'paid',$3,$4,$5)`,
-			id, method, fmt.Sprintf("MID-%08d", rng.IntN(100_000_000)), subtotal+shipCost, paidAt); err != nil {
+			`INSERT INTO payments (order_id, method, status, ref, amount, paid_at, gateway_fee) VALUES ($1,$2,'paid',$3,$4,$5,$6)`,
+			id, method, fmt.Sprintf("MID-%08d", rng.IntN(100_000_000)), subtotal+shipCost, paidAt,
+			GatewayFee(method, "", subtotal+shipCost)); err != nil {
 			return err
 		}
 
@@ -388,14 +374,26 @@ func seedOrders(ctx context.Context, tx pgx.Tx, cat *seedCatalog, rng *rand.Rand
 			}
 		}
 
-		// royalti kreator 12% dari nilai item
-		if designer := designerByDesign[l.DesignID]; designer != "" {
-			if _, err := tx.Exec(ctx,
-				`INSERT INTO royalties (designer_id, order_item_id, amount, created_at) VALUES ($1,$2,$3,$4)`,
-				designer, itemID, int(float64(subtotal)*0.12), paidAt); err != nil {
-				return err
-			}
+		// bagian kreator & produsen — sama persis dengan pembayaran sungguhan
+		if err := BookPaidOrder(ctx, tx, id); err != nil {
+			return err
+		}
+		// tanggal pembukuan = tanggal bayar (bukan waktu seeding)
+		if _, err := tx.Exec(ctx, `
+			UPDATE royalties r SET created_at = $2 FROM order_items oi
+			WHERE oi.id = r.order_item_id AND oi.order_id = $1`, id, paidAt); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE producer_charges SET created_at = $2 WHERE order_id = $1`, id, paidAt); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func nilIfBlank(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }

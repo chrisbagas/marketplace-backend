@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -12,49 +11,60 @@ import (
 // Product matches FullListing on the frontend so the catalog can be served
 // from the database (the FE currently ships the same seed statically).
 type Product struct {
-	ID           string   `json:"id"`
-	DesignID     string   `json:"designId"`
-	Type         string   `json:"type"`
-	Price        int      `json:"price"`
-	Sold         int      `json:"sold"`
-	Rating       float64  `json:"rating"`
-	Badge        string   `json:"badge,omitempty"`
-	Title        string   `json:"title"`
-	DesignURI    string   `json:"designUri"`
-	DesignerName   string `json:"designerName"`
-	DesignerID     string `json:"designerId"`
-	DesignerAvatar string `json:"designerAvatar"`
-	TypeLabel    string   `json:"typeLabel"`
-	Sizes        []string `json:"sizes"`
-	ColorIds     []string `json:"colorIds"`
-	Tags         []string `json:"tags"`
-	Categories   []string `json:"categories"`
-	Active       bool     `json:"active"`
+	ID             string   `json:"id"`
+	DesignID       string   `json:"designId"`
+	Type           string   `json:"type"`
+	Price          int      `json:"price"`
+	Sold           int      `json:"sold"`
+	Rating         float64  `json:"rating"`
+	Badge          string   `json:"badge,omitempty"`
+	Title          string   `json:"title"`
+	DesignURI      string   `json:"designUri"`
+	DesignerName   string   `json:"designerName"`
+	DesignerID     string   `json:"designerId"`
+	DesignerAvatar string   `json:"designerAvatar"`
+	TypeLabel      string   `json:"typeLabel"`
+	Sizes          []string `json:"sizes"`
+	ColorIds       []string `json:"colorIds"`
+	Tags           []string `json:"tags"`
+	Category       string   `json:"category"`   // product category id (Pakaian, ...)
+	Attributes     []string `json:"attributes"` // attribute value ids (tema, gaya, acara)
+	Active         bool     `json:"active"`
 }
 
-const productQuery = `
+// effectiveColors: a listing's own colour subset, or every colour of its product type.
+const effectiveColors = `CASE WHEN l.color_ids IS NOT NULL AND cardinality(l.color_ids) > 0 THEN l.color_ids
+	            ELSE (SELECT COALESCE(array_agg(color_id ORDER BY sort), '{}') FROM product_type_colors WHERE product_type_id = pt.id)
+	       END`
+
+const productCols = `
 	SELECT l.id, l.design_id, l.product_type_id, l.price, l.sold, l.rating, COALESCE(l.badge,''),
 	       COALESCE(l.title_override, pt.label || ' ' || d.title), d.uri, dr.name, dr.id, dr.avatar_uri, pt.label, d.tags,
 	       (SELECT COALESCE(array_agg(size ORDER BY sort), '{}') FROM product_type_sizes WHERE product_type_id = pt.id),
-	       CASE WHEN l.color_ids IS NOT NULL AND cardinality(l.color_ids) > 0 THEN l.color_ids
-	            ELSE (SELECT COALESCE(array_agg(color_id ORDER BY sort), '{}') FROM product_type_colors WHERE product_type_id = pt.id)
-	       END,
-	       (SELECT COALESCE(array_agg(category_id), '{}') FROM design_categories WHERE design_id = d.id),
-	       l.active
+	       ` + effectiveColors + `,
+	       COALESCE(pt.category_id, ''),
+	       (SELECT COALESCE(array_agg(value_id), '{}') FROM design_attributes WHERE design_id = d.id),
+	       l.active`
+
+const productJoins = `
 	FROM listings l
 	JOIN designs d ON d.id = l.design_id
 	JOIN designers dr ON dr.id = d.designer_id
-	JOIN product_types pt ON pt.id = l.product_type_id
+	JOIN product_types pt ON pt.id = l.product_type_id`
+
+const productQuery = productCols + productJoins + `
 	WHERE true`
 
 func scanProduct(row pgx.Row) (Product, error) {
 	var p Product
 	err := row.Scan(&p.ID, &p.DesignID, &p.Type, &p.Price, &p.Sold, &p.Rating, &p.Badge,
 		&p.Title, &p.DesignURI, &p.DesignerName, &p.DesignerID, &p.DesignerAvatar, &p.TypeLabel, &p.Tags,
-		&p.Sizes, &p.ColorIds, &p.Categories, &p.Active)
+		&p.Sizes, &p.ColorIds, &p.Category, &p.Attributes, &p.Active)
 	return p, err
 }
 
+// getProducts lists listings unpaged, best sellers first: the home page and
+// the creator's "Kelola produk". The storefront catalog uses GET /api/search.
 func (s *Server) getProducts(w http.ResponseWriter, r *http.Request) {
 	query := productQuery
 	args := []any{}
@@ -69,17 +79,6 @@ func (s *Server) getProducts(w http.ResponseWriter, r *http.Request) {
 	if t := r.URL.Query().Get("type"); t != "" {
 		args = append(args, t)
 		query += fmt.Sprintf(` AND l.product_type_id = $%d`, len(args))
-	}
-	if c := r.URL.Query().Get("category"); c != "" {
-		args = append(args, c)
-		query += fmt.Sprintf(` AND EXISTS (SELECT 1 FROM design_categories dc WHERE dc.design_id = d.id AND dc.category_id = $%d)`, len(args))
-	}
-	// pencarian: judul produk/desain, nama kreator, atau tag
-	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
-		args = append(args, "%"+q+"%")
-		n := len(args)
-		query += fmt.Sprintf(` AND (pt.label || ' ' || d.title ILIKE $%d OR dr.name ILIKE $%d
-			OR EXISTS (SELECT 1 FROM unnest(d.tags) tag WHERE tag ILIKE $%d))`, n, n, n)
 	}
 	query += ` ORDER BY l.sold DESC`
 	rows, err := s.pool.Query(r.Context(), query, args...)
@@ -98,41 +97,6 @@ func (s *Server) getProducts(w http.ResponseWriter, r *http.Request) {
 		products = append(products, p)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"products": products})
-}
-
-// getCategories: daftar kategori terkurasi + jumlah produk aktif per kategori.
-func (s *Server) getCategories(w http.ResponseWriter, r *http.Request) {
-	type Category struct {
-		ID    string `json:"id"`
-		Label string `json:"label"`
-		Emoji string `json:"emoji"`
-		Count int    `json:"count"`
-	}
-	rows, err := s.pool.Query(r.Context(), `
-		SELECT c.id, c.label, c.emoji, COALESCE(n.cnt, 0)
-		FROM categories c
-		LEFT JOIN (
-			SELECT dc.category_id, count(DISTINCT l.id) AS cnt
-			FROM design_categories dc
-			JOIN listings l ON l.design_id = dc.design_id AND l.active
-			GROUP BY dc.category_id
-		) n ON n.category_id = c.id
-		ORDER BY c.sort`)
-	if err != nil {
-		errJSON(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	defer rows.Close()
-	cats := []Category{}
-	for rows.Next() {
-		var c Category
-		if err := rows.Scan(&c.ID, &c.Label, &c.Emoji, &c.Count); err != nil {
-			errJSON(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		cats = append(cats, c)
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"categories": cats})
 }
 
 func (s *Server) getProduct(w http.ResponseWriter, r *http.Request) {

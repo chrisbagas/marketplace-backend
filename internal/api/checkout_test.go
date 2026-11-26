@@ -75,7 +75,8 @@ func setupCheckout(t *testing.T) *checkoutFixture {
 		pool.Exec(ctx, `DELETE FROM orders WHERE user_id = ANY($1)`, users)
 		pool.Exec(ctx, `DELETE FROM listings WHERE design_id = $1`, "dz-co-"+tag)
 		pool.Exec(ctx, `DELETE FROM designs WHERE id = $1`, "dz-co-"+tag)
-		pool.Exec(ctx, `DELETE FROM designers WHERE id = ANY($1)`, []string{"d-co-" + tag, "d-co2-" + tag})
+		pool.Exec(ctx, `DELETE FROM payouts WHERE designer_id = ANY($1)`, []string{"d-co-" + tag, "d-co2-" + tag})
+		pool.Exec(ctx, `DELETE FROM designers WHERE id = ANY($1)`,[]string{"d-co-" + tag, "d-co2-" + tag})
 		pool.Exec(ctx, `DELETE FROM vouchers WHERE code LIKE $1`, "T"+strings.ToUpper(tag)+"%")
 		pool.Exec(ctx, `DELETE FROM users WHERE id = ANY($1)`, users)
 	})
@@ -106,6 +107,14 @@ func quoteOf(t *testing.T, out map[string]any) map[string]any {
 }
 
 func num(v any) int { f, _ := v.(float64); return int(f) }
+
+func kaosBase(t *testing.T, pool *pgxpool.Pool) (base int) {
+	t.Helper()
+	if err := pool.QueryRow(context.Background(), `SELECT base_price FROM product_types WHERE id='kaos'`).Scan(&base); err != nil {
+		t.Fatal(err)
+	}
+	return base
+}
 
 func TestQuoteUsesServerPricesAndKeepsSizesSeparate(t *testing.T) {
 	f := setupCheckout(t)
@@ -292,8 +301,8 @@ func TestOrderOwnershipAndAdminDesignerViews(t *testing.T) {
 	}
 	_, out = call(f.s, "GET", "/api/designer/orders", nil, f.creator)
 	summary := out["summary"].(map[string]any)
-	want := int(float64(3*f.price) * 0.12)
-	if num(summary["royaltyBooked"]) < want-2 || num(summary["royaltyBooked"]) > want+2 || num(summary["paidUnits"]) != 3 {
+	want := 3 * (f.price - kaosBase(t, f.pool)) // kreator = harga jual − harga dasar
+	if num(summary["royaltyBooked"]) != want || num(summary["paidUnits"]) != 3 {
 		t.Errorf("royalti setelah bayar: %v, want ±%d", summary, want)
 	}
 	if rec, _ := call(f.s, "PATCH", "/api/orders/"+id, map[string]string{"action": "advance"}, f.buyer); rec.Code != http.StatusForbidden {

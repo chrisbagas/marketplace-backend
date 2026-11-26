@@ -2,15 +2,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"karyakita/api/internal/api"
 	"karyakita/api/internal/db"
 	"karyakita/api/internal/envfile"
 	"karyakita/api/internal/mail"
+	"karyakita/api/internal/midtrans"
 )
 
 func main() {
@@ -41,6 +44,10 @@ func main() {
 	}
 	if err := db.SeedIfEmpty(ctx, pool); err != nil {
 		log.Fatalf("seed gagal: %v", err)
+	}
+	// rebuild the search index: cheap, and it picks up anything changed outside the API
+	if err := db.ReindexSearch(ctx, pool, nil); err != nil {
+		log.Fatalf("indeks pencarian: %v", err)
 	}
 	production := os.Getenv("APP_ENV") == "production"
 	if !production {
@@ -78,6 +85,7 @@ func main() {
 
 	log.Printf("KaryaKita API siap di http://localhost:%s (db ok, skema termigrasi, upload → %s)", port, uploadDir)
 	srv := api.NewServer(pool, uploadDir, authCfg)
+	srv.SetPayments(newPayments(production))
 	// pesanan "tiba" selesai otomatis 2 hari setelah paket sampai (dicek tiap 10 menit)
 	go srv.RunOrderJobs(ctx, 10*time.Minute)
 	if err := http.ListenAndServe(":"+port, srv); err != nil {
@@ -113,4 +121,52 @@ func newMailer(production bool) mail.Mailer {
 	}
 	log.Printf("email dikirim lewat SMTP %s:%s", m.Host, m.Port)
 	return m
+}
+
+// newPayments memilih penyedia pembayaran:
+//
+//	MIDTRANS_SERVER_KEY diisi → Midtrans (MIDTRANS_ENV=production untuk produksi, selain itu sandbox)
+//	kosong, bukan produksi    → mock (pembayaran tiruan untuk dev)
+//	kosong, produksi          → none (pembayaran dinonaktifkan; admin bisa tandai lunas manual)
+func newPayments(production bool) api.PaymentsConfig {
+	serverKey := os.Getenv("MIDTRANS_SERVER_KEY")
+	if serverKey == "" {
+		if production {
+			log.Printf("PERINGATAN: MIDTRANS_SERVER_KEY kosong di produksi — pembayaran online nonaktif")
+			return api.PaymentsConfig{Provider: "none"}
+		}
+		log.Printf("pembayaran: MOCK (isi MIDTRANS_SERVER_KEY & MIDTRANS_CLIENT_KEY untuk Midtrans sandbox)")
+		return api.PaymentsConfig{Provider: "mock"}
+	}
+	clientKey := os.Getenv("MIDTRANS_CLIENT_KEY")
+	if clientKey == "" {
+		log.Fatal("MIDTRANS_CLIENT_KEY wajib diisi bersama MIDTRANS_SERVER_KEY")
+	}
+	prod := os.Getenv("MIDTRANS_ENV") == "production"
+	var enabled []string
+	for _, p := range strings.Split(os.Getenv("MIDTRANS_ENABLED_PAYMENTS"), ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			enabled = append(enabled, p)
+		}
+	}
+	env := "sandbox"
+	if prod {
+		env = "PRODUKSI"
+	}
+	client := midtrans.New(serverKey, clientKey, prod)
+	// Tanya Midtrans langsung apakah kunci ini diterima di lingkungan yang dipilih
+	// (lebih andal daripada menebak dari awalan kunci). Kunci ditolak → berhenti.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := client.CheckCredentials(ctx); err != nil {
+		var apiErr *midtrans.APIError
+		if errors.As(err, &apiErr) && (apiErr.Status == 401 || apiErr.Status == 403) {
+			log.Fatalf("Midtrans (%s) menolak MIDTRANS_SERVER_KEY — kunci salah, atau kunci sandbox/produksi tertukar dengan MIDTRANS_ENV=%s", env, os.Getenv("MIDTRANS_ENV"))
+		}
+		log.Printf("PERINGATAN: kunci Midtrans belum bisa diverifikasi (%v) — lanjut, akan dicoba lagi saat pembayaran", err)
+	} else {
+		log.Printf("pembayaran: kunci Midtrans %s diterima", env)
+	}
+	log.Printf("pembayaran: Midtrans %s (webhook: POST /api/payments/midtrans/notification)", env)
+	return api.PaymentsConfig{Provider: "midtrans", Midtrans: client, EnabledPayments: enabled}
 }

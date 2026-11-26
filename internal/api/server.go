@@ -18,6 +18,7 @@ type Server struct {
 	uploadDir string
 	auth      AuthConfig
 	limiter   *rateLimiter
+	payments  PaymentsConfig
 }
 
 func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
@@ -62,9 +63,25 @@ func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
 	s.route("POST /api/orders", "/api/orders", s.authed(s.postOrder))
 	s.route("GET /api/orders", "/api/orders", s.authed(s.getOrders, admin))
 	s.route("GET /api/orders/mine", "/api/orders", s.authed(s.getMyOrders))
+	s.route("GET /api/payments/config", "/api/payments", s.getPaymentConfig)
+	s.route("POST /api/payments/midtrans/notification", "/api/payments", s.postMidtransNotification) // dipanggil Midtrans; dijaga tanda tangan
+	s.route("POST /api/orders/{id}/payment", "/api/orders", s.authed(s.postPaymentSession))
+	s.route("POST /api/orders/{id}/payment/sync", "/api/orders", s.authed(s.postPaymentSync))
 	s.route("GET /api/orders/{id}", "/api/orders", s.authed(s.getOrder))     // pemilik / admin
 	s.route("PATCH /api/orders/{id}", "/api/orders", s.authed(s.patchOrder)) // pay: pemilik/admin · advance: admin
 	s.route("GET /api/designer/orders", "/api/designer", s.authed(s.getDesignerOrders, designer, admin))
+	// penarikan saldo kreator: royalti bisa ditarik setelah pesanan selesai; transfer manual oleh admin
+	s.route("GET /api/designer/payouts", "/api/designer", s.authed(s.getDesignerPayouts, designer, admin))
+	s.route("POST /api/designer/payouts", "/api/designer", s.authed(s.postDesignerPayout, designer))
+	s.route("PATCH /api/designer/bank", "/api/designer", s.authed(s.patchDesignerBank, designer))
+	s.route("GET /api/payouts", "/api/payouts", s.authed(s.getPayouts, admin))
+	s.route("PATCH /api/payouts/{id}", "/api/payouts", s.authed(s.patchPayout, admin))
+	// keuangan: pembagian uang per pesanan + tagihan produsen (vendor cetak yang juga mengirim paket)
+	s.route("GET /api/finance", "/api/finance", s.authed(s.getFinance, admin))
+	s.route("GET /api/producers", "/api/producers", s.authed(s.getProducers, admin))
+	s.route("PATCH /api/producers/{id}", "/api/producers", s.authed(s.patchProducer, admin))
+	s.route("POST /api/producers/{id}/payouts", "/api/producers", s.authed(s.postProducerPayout, admin))
+	s.route("PATCH /api/product-types/{id}", "/api/product-types", s.authed(s.patchProductType, admin))
 	s.route("GET /api/vouchers", "/api/vouchers", s.authed(s.getVouchers, admin))
 	s.route("POST /api/vouchers", "/api/vouchers", s.authed(s.postVoucher, admin))
 	s.route("PATCH /api/vouchers/{code}", "/api/vouchers", s.authed(s.patchVoucher, admin))
@@ -73,7 +90,15 @@ func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
 	s.route("PATCH /api/designs", "/api/designs", s.authed(s.patchDesign, admin))
 	s.route("GET /api/products", "/api/products", s.getProducts)
 	s.route("GET /api/products/{id}", "/api/products", s.getProduct)
-	s.route("GET /api/categories", "/api/categories", s.getCategories)
+	s.route("GET /api/search", "/api/search", s.getSearch)
+	s.route("GET /api/search/suggest", "/api/search/suggest", s.getSuggest)
+	s.route("GET /api/taxonomy", "/api/taxonomy", s.getTaxonomy)
+	s.route("GET /api/search/insights", "/api/search/admin", s.authed(s.getSearchInsights, admin))
+	s.route("POST /api/search/synonyms", "/api/search/admin", s.authed(s.postSynonym, admin))
+	s.route("DELETE /api/search/synonyms/{id}", "/api/search/admin", s.authed(s.deleteSynonym, admin))
+	s.route("POST /api/attributes/{id}/values", "/api/attributes", s.authed(s.postAttributeValue, admin))
+	s.route("PATCH /api/attribute-values/{id}", "/api/attributes", s.authed(s.patchAttributeValue, admin))
+	s.route("DELETE /api/attribute-values/{id}", "/api/attributes", s.authed(s.deleteAttributeValue, admin))
 	s.route("PATCH /api/listings/{id}", "/api/listings", s.authed(s.patchListing, designer, admin))
 	s.route("POST /api/uploads", "/api/uploads", s.authed(s.postUpload))
 	s.route("GET /api/profile", "/api/profile", s.authed(s.getProfile))

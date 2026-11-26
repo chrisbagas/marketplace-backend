@@ -68,13 +68,20 @@ peran salah → `403`.
 | `/api/auth/password/forgot` | POST | publik | `{email}` → kirim link reset (respons selalu sama) |
 | `/api/auth/password/reset` | POST | publik | `{token, password}` → password baru + sesi baru |
 | `/api/auth/google/start`, `/callback` | GET | publik | Alur OAuth Google (redirect) |
-| `/api/products`, `/api/products/{id}`, `/api/categories` | GET | publik | Katalog |
+| `/api/products`, `/api/products/{id}` | GET | publik | Katalog (daftar tanpa halaman + detail) |
+| `/api/search` | GET | publik | Pencarian katalog: `q`, `type`, `category`, `attr`, `color`, `min`, `max`, `designer`, `sort`, `page`, `limit` → produk + jumlah per filter |
+| `/api/search/suggest`, `/api/taxonomy` | GET | publik | Saran saat mengetik · kategori, atribut & warna beserta jumlah produknya |
+| `/api/search/insights`, `/api/search/synonyms(/{id})`, `/api/attributes/{id}/values`, `/api/attribute-values/{id}` | GET/POST/PATCH/DELETE | admin | Pencarian tanpa hasil, sinonim, pilihan atribut |
 | `/api/checkout/quote` | POST | login | `{items, courier, voucher}` → ringkasan harga dari server (harga, ongkir, diskon) |
 | `/api/orders` | POST | login | Buat pesanan — harga dihitung ulang di server, tertaut ke akun |
 | `/api/orders` | GET | admin | Daftar pesanan `?status=&q=&limit=&offset=` → `{orders, total}` |
 | `/api/orders/mine` | GET | login | Riwayat pesanan akun ini |
 | `/api/orders/{id}` | GET | pemilik, admin | Detail (akun lain → 404) |
-| `/api/orders/{id}` | PATCH | pemilik, admin | `{action:"pay"}` (≈ webhook gateway) — pemilik/admin. Khusus admin: `advance` (dibayar→produksi), `ship` `{courier, trackingNumber}` (produksi→dikirim, **resi wajib**), `update-shipment` (koreksi resi), `delivered` (dikirim→tiba, laporan kurir). Khusus **pembeli**: `confirm` (tiba→selesai) |
+| `/api/payments/config` | GET | publik | `{provider: midtrans, mock, atau none; clientKey; snapUrl}` untuk frontend |
+| `/api/orders/{id}/payment` | POST | pemilik, admin | Buat/lanjutkan sesi Snap → `{token}` |
+| `/api/orders/{id}/payment/sync` | POST | pemilik, admin | Server menanyakan status ke Midtrans & menerapkannya |
+| `/api/payments/midtrans/notification` | POST | Midtrans | Webhook (tanda tangan + konfirmasi Status API) |
+| `/api/orders/{id}` | PATCH | pemilik, admin | `{action:"pay"}` — hanya mode **mock** untuk pembeli; di mode Midtrans hanya admin (lunas manual). Khusus admin: `advance` (dibayar→produksi), `ship` `{courier, trackingNumber}` (produksi→dikirim, **resi wajib**), `update-shipment` (koreksi resi), `delivered` (dikirim→tiba, laporan kurir). Khusus **pembeli**: `confirm` (tiba→selesai) |
 | `/api/designer/orders` | GET | kreator, admin | Item pesanan yang memuat produk kreator + royalti (tanpa alamat/kontak pembeli) |
 | `/api/vouchers` | GET / POST | admin | Daftar (+ pemakaian) / buat voucher |
 | `/api/vouchers/{code}` | PATCH | admin | `{active}` |
@@ -151,3 +158,24 @@ menunggu-pembayaran → dibayar → produksi → dikirim → tiba → selesai
 - `selesai` hanya lewat tombol **Pesanan diterima** oleh pemilik pesanan, atau otomatis oleh job
   `RunOrderJobs` (dicek saat API start dan tiap 10 menit) bila `delivered_at` lewat
   `AutoCompleteAfter` (48 jam). Database menolak status `tiba`/`selesai` tanpa `delivered_at`.
+
+## Pembayaran (Midtrans)
+
+- **Penyedia** dipilih dari env: `MIDTRANS_SERVER_KEY` diisi → Midtrans (sandbox, atau produksi bila
+  `MIDTRANS_ENV=production`); kosong di dev → **mock** (pembayaran tiruan); kosong di produksi → **none**.
+- **Alur**: `POST /orders/{id}/payment` membuat transaksi Snap (item + ongkir + diskon, nominal =
+  total pesanan, masa berlaku = sisa batas bayar) → browser membuka popup Snap → Midtrans memberi
+  tahu lewat webhook, dan server juga bisa menanyakan sendiri (`payment/sync`).
+- **Keamanan**: pesanan HANYA lunas bila **Status API Midtrans** (dipanggil server dengan Server Key)
+  menyatakan `settlement`/`capture`. Webhook diperiksa tanda tangannya (SHA512) lalu *dikonfirmasi
+  ulang* ke Status API, jadi webhook palsu tidak berguna; nominal harus sama dengan total pesanan;
+  tiap notifikasi dicatat di `payment_notifications`. Pembeli tidak bisa memanggil `pay` sendiri.
+- **Idempoten**: notifikasi berulang tidak menggandakan royalti/counter terjual.
+- **Percobaan ulang**: `order_id` Midtrans = `<no. pesanan>-<percobaan>`; bayar ulang setelah ditolak
+  memakai percobaan berikutnya, notifikasi percobaan lama diabaikan.
+- **Batas bayar 24 jam** (`UnpaidOrderTTL`): `expire` dari Midtrans atau job (`RunOrderJobs`)
+  membatalkan pesanan (`dibatalkan`) dan membebaskan voucher. Pembayaran yang terlambat masuk
+  setelah dibatalkan tetap diterima (pesanan aktif kembali).
+- **Biaya**: ditentukan Midtrans per kanal (QRIS dan VA paling murah; e-wallet sekitar 2%). Matikan
+  kanal yang tidak diperlukan di dashboard Midtrans atau lewat `MIDTRANS_ENABLED_PAYMENTS`.
+- **Belum ada**: refund / chargeback (notifikasinya hanya dicatat) dan rekonsiliasi pencairan dana.

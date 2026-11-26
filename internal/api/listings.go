@@ -114,6 +114,11 @@ func (s *Server) patchListing(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// nama & status aktif ikut menentukan hasil pencarian
+	if body.Title != nil || body.Active != nil {
+		s.reindexSearch(ctx, id)
+	}
+
 	p, err := scanProduct(s.pool.QueryRow(ctx, productQuery+` AND l.id = $1`, id))
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
