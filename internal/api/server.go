@@ -88,7 +88,7 @@ func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
 	s.route("GET /api/designs", "/api/designs", s.authed(s.getDesigns, designer, admin))
 	s.route("POST /api/designs", "/api/designs", s.authed(s.postDesign, designer, admin))
 	s.route("PATCH /api/designs", "/api/designs", s.authed(s.patchDesign, admin))
-	s.route("GET /api/products", "/api/products", s.getProducts)
+	s.route("GET /api/products", "/api/products", s.optionalUser(s.getProducts))
 	s.route("GET /api/products/{id}", "/api/products", s.getProduct)
 	s.route("GET /api/search", "/api/search", s.getSearch)
 	s.route("GET /api/search/suggest", "/api/search/suggest", s.getSuggest)

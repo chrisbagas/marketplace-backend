@@ -68,12 +68,14 @@ func scanProduct(row pgx.Row) (Product, error) {
 func (s *Server) getProducts(w http.ResponseWriter, r *http.Request) {
 	query := productQuery
 	args := []any{}
-	// tanpa filter designer: katalog publik hanya listing aktif;
-	// dengan designer: semua listing miliknya (utk dashboard kelola produk)
-	if dsg := r.URL.Query().Get("designer"); dsg != "" {
+	// Inactive listings are visible only to the shop owner (creator dashboard)
+	// and admins; everyone else gets active listings only.
+	dsg := r.URL.Query().Get("designer")
+	if dsg != "" {
 		args = append(args, dsg)
 		query += fmt.Sprintf(` AND dr.id = $%d`, len(args))
-	} else {
+	}
+	if u := userFrom(r); dsg == "" || u == nil || !(u.Role == "admin" || (u.Designer != nil && u.Designer.ID == dsg)) {
 		query += ` AND l.active`
 	}
 	if t := r.URL.Query().Get("type"); t != "" {
