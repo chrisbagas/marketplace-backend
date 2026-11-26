@@ -82,6 +82,10 @@ peran salah → `403`.
 | `/api/orders/{id}/payment/sync` | POST | pemilik, admin | Server menanyakan status ke Midtrans & menerapkannya |
 | `/api/payments/midtrans/notification` | POST | Midtrans | Webhook (tanda tangan + konfirmasi Status API) |
 | `/api/orders/{id}` | PATCH | pemilik, admin | `{action:"pay"}` — hanya mode **mock** untuk pembeli; di mode Midtrans hanya admin (lunas manual). Khusus admin: `advance` (dibayar→produksi), `ship` `{courier, trackingNumber}` (produksi→dikirim, **resi wajib**), `update-shipment` (koreksi resi), `delivered` (dikirim→tiba, laporan kurir). Khusus **pembeli**: `confirm` (tiba→selesai) |
+| `/api/orders/{id}/cancel` | POST | pemilik, admin | Batalkan pesanan **belum dibayar** (transaksi Midtrans yang terbuka ikut dibatalkan, voucher bebas). Pesanan yang sudah dibayar → pembeli 403 |
+| `/api/orders/{id}/refund` | POST | admin | `{reason, method?: gateway\|manual, reference?}` — batalkan pesanan `dibayar` + refund penuh. `gateway` = Midtrans Refund API (QRIS, GoPay, kartu, dll.); selain itu transfer manual dengan nomor referensi. Membalik royalti & tagihan produsen |
+| `/api/orders/{id}/complaint` | POST | pembeli | `{reason, description, photos[≤3]}` saat pesanan `tiba`; menahan selesai-otomatis |
+| `/api/complaints`, `/api/complaints/{id}` | GET / PATCH | admin | Daftar komplain · `{action: reprint\|refund\|reject, amount?, method?, reference?, note?}` |
 | `/api/designer/orders` | GET | kreator, admin | Item pesanan yang memuat produk kreator + royalti (tanpa alamat/kontak pembeli) |
 | `/api/vouchers` | GET / POST | admin | Daftar (+ pemakaian) / buat voucher |
 | `/api/vouchers/{code}` | PATCH | admin | `{active}` |

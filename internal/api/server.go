@@ -69,6 +69,12 @@ func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
 	s.route("POST /api/orders/{id}/payment/sync", "/api/orders", s.authed(s.postPaymentSync))
 	s.route("GET /api/orders/{id}", "/api/orders", s.authed(s.getOrder))     // pemilik / admin
 	s.route("PATCH /api/orders/{id}", "/api/orders", s.authed(s.patchOrder)) // pay: pemilik/admin · advance: admin
+	// pembatalan, refund, komplain
+	s.route("POST /api/orders/{id}/cancel", "/api/orders", s.authed(s.postOrderCancel))        // belum dibayar: pembeli / admin
+	s.route("POST /api/orders/{id}/refund", "/api/orders", s.authed(s.postOrderRefund, admin)) // dibayar: batal + refund
+	s.route("POST /api/orders/{id}/complaint", "/api/orders", s.authed(s.postComplaint))       // pembeli, status tiba
+	s.route("GET /api/complaints", "/api/complaints", s.authed(s.getComplaints, admin))
+	s.route("PATCH /api/complaints/{id}", "/api/complaints", s.authed(s.patchComplaint, admin))
 	s.route("GET /api/designer/orders", "/api/designer", s.authed(s.getDesignerOrders, designer, admin))
 	// penarikan saldo kreator: royalti bisa ditarik setelah pesanan selesai; transfer manual oleh admin
 	s.route("GET /api/designer/payouts", "/api/designer", s.authed(s.getDesignerPayouts, designer, admin))

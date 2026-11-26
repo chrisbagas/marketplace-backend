@@ -3,14 +3,14 @@
 Database: **PostgreSQL 16** · skema penuh di [`internal/db/schema.sql`](internal/db/schema.sql)
 (dimigrasikan otomatis saat API pertama kali start, dicatat di `schema_migrations`).
 
-36 tabel dalam 7 kelompok:
+38 tabel dalam 7 kelompok:
 
 | Kelompok | Tabel |
 |---|---|
 | **Identitas** | `users` (profil + preferensi + kredensial), `sessions` (sesi login), `auth_tokens` (link verifikasi & reset password), `designers`, `user_designs` (desain custom pribadi — tanpa royalti) |
 | **Katalog** | `product_types`, `colors`, `product_type_colors`, `product_type_sizes`, `designs`, `listings`, `categories` (product tree), `attributes`, `attribute_values`, `design_attributes` |
 | **Pencarian** | `listing_search` (search document per listing), `search_words` (vocabulary for typo correction), `search_synonyms` |
-| **Transaksi** | `orders`, `order_items`, `payments`, `order_events`, `reviews` (ulasan terverifikasi + moderasi), `vouchers`, `payment_notifications` (jejak webhook/sync gateway) |
+| **Transaksi** | `orders`, `order_items`, `payments`, `order_events`, `reviews` (ulasan terverifikasi + moderasi), `vouchers`, `payment_notifications` (jejak webhook/sync gateway), `refunds` (pengembalian dana), `complaints` (komplain pembeli) |
 | **Kreator** | `design_submissions` (terbit jadi listing saat disetujui), `royalties`, `payouts` |
 | **Keuangan** | `producers` (vendor cetak + kirim), `producer_charges` (hak vendor per pesanan), `producer_payouts` (transfer ke vendor) |
 | **Analitik** | `track_events`, `web_vitals`, `api_metrics`, `search_terms`, `day_stats` |
@@ -58,6 +58,9 @@ erDiagram
     producers ||--o{ product_types : "mencetak"
     producers ||--o{ producer_charges : "berhak atas"
     orders ||--o{ producer_charges : "biaya produksi + ongkir"
+    orders ||--o{ refunds : "dana dikembalikan"
+    orders ||--o| complaints : "komplain pembeli"
+    orders ||--o{ orders : "cetak ulang (reprint_of)"
     producer_payouts ||--o{ producer_charges : "melunasi"
 
     users {
@@ -226,8 +229,35 @@ erDiagram
         bigint id PK
         text designer_id FK
         bigint order_item_id FK,UK
-        int amount "(harga jual - harga dasar) x qty"
+        int amount "royalti BERSIH = (harga jual - harga dasar) x qty - reversed_amount"
+        int reversed_amount "ditarik kembali karena refund (migrasi 019)"
         timestamptz created_at
+    }
+    refunds {
+        bigint id PK
+        text order_id FK
+        int amount
+        text method "gateway | manual"
+        text reference "refund_key Midtrans / no. transfer"
+        text reason
+        int royalty_reversed
+        int vendor_reversed
+        text created_by FK
+        timestamptz created_at
+    }
+    complaints {
+        bigint id PK
+        text order_id FK,UK
+        text user_id FK
+        text reason "cacat-cetak | salah-produk | rusak | tidak-sesuai | lainnya"
+        text description
+        text_array photos "maks 3 URL"
+        text status "terbuka | dicetak-ulang | direfund | ditolak"
+        text resolution_note
+        bigint refund_id FK
+        text reprint_order_id FK
+        timestamptz created_at
+        timestamptz resolved_at
     }
     payouts {
         bigint id PK
@@ -405,6 +435,23 @@ erDiagram
   menghitung pesanan dibatalkan.
 - **Selesai hanya oleh pembeli.** `tiba` (wajib `delivered_at`, CHECK `orders_delivered_has_time`)
   → `selesai` lewat konfirmasi pembeli atau otomatis 48 jam setelah tiba (`completed_at`).
+- **Pembatalan & refund** (migrasi 019, tanpa nilai enum baru). Pesanan belum dibayar dibatalkan
+  pembeli/admin (`dibatalkan`, transaksi Midtrans yang masih terbuka ikut di-*cancel*). Pesanan
+  `dibayar` dibatalkan admin dengan refund penuh → status `dibatalkan`, `payments.status` tetap
+  `paid` (uangnya memang masuk), pengembalian ada di `refunds` (`method` gateway | manual,
+  `reference` = `refund_key` Midtrans / no. transfer bank). Buku dibalik di transaksi yang sama:
+  `royalties.amount` = royalti **bersih**, `reversed_amount` = yang ditarik kembali (asli = jumlahnya),
+  jadi semua rumus saldo yang menjumlah `amount` tetap benar dan royalti yang dibalik tidak bisa
+  ditarik. Tagihan produsen (`producer_charges`) pesanan yang dibatalkan dihapus — pesanan `dibayar`
+  belum pernah dikirim, jadi belum pernah ikut dibayar ke produsen (bila ada yang sudah, pembatalan
+  ditolak). Counter `listings.sold` dikembalikan. Refund sebagian (komplain) membalik royalti sebanding:
+  `reversed = round(asli × total_refund_kumulatif / dibayar)` per baris; tagihan produsen tidak dibalik
+  (barang sudah dicetak dan dikirim). Biaya gateway tidak dikembalikan Midtrans, tetap tercatat.
+- **Komplain** (`complaints`, satu per pesanan, hanya saat `tiba`): alasan + keterangan + maks 3 URL foto.
+  `terbuka` menahan selesai-otomatis; setelah diputuskan (`dicetak-ulang` | `direfund` | `ditolak`)
+  hitungan 48 jam dimulai dari `resolved_at`. Cetak ulang = pesanan baru (`orders.reprint_of`) bertotal 0,
+  `payments` 0 berstatus `paid` (gateway `manual`), item disalin, langsung `dibayar`; hanya
+  `producer_charges` (produksi + ongkir) yang dibukukan — tanpa royalti dan tanpa biaya gateway.
 - **Resi wajib sebelum dikirim.** CHECK `orders_shipped_has_tracking`: status `dikirim`/`selesai`
   harus punya `shipped_courier`, `tracking_number`, `shipped_at`. Indeks unik
   `(lower(shipped_courier), tracking_number)` mencegah satu resi dipakai dua pesanan.

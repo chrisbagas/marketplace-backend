@@ -28,6 +28,7 @@ type PayoutBalance struct {
 	InProcess int `json:"inProcess"` // pengajuan diminta/diproses
 	Withdrawn int `json:"withdrawn"` // sudah ditransfer
 	Released  int `json:"released"`  // total royalti dari pesanan selesai
+	Reversed  int `json:"reversed"`  // royalti yang ditarik kembali karena refund (tidak bisa ditarik)
 }
 
 type BankAccount struct {
@@ -54,11 +55,12 @@ func designerBalance(ctx context.Context, q querier, designerID string) (PayoutB
 	var b PayoutBalance
 	if err := q.QueryRow(ctx, `
 		SELECT COALESCE(sum(r.amount) FILTER (WHERE o.status = 'selesai'), 0)::int,
-		       COALESCE(sum(r.amount) FILTER (WHERE o.status NOT IN ('selesai', 'dibatalkan')), 0)::int
+		       COALESCE(sum(r.amount) FILTER (WHERE o.status NOT IN ('selesai', 'dibatalkan')), 0)::int,
+		       COALESCE(sum(r.reversed_amount), 0)::int
 		FROM royalties r
 		JOIN order_items oi ON oi.id = r.order_item_id
 		JOIN orders o       ON o.id = oi.order_id
-		WHERE r.designer_id = $1`, designerID).Scan(&b.Released, &b.Pending); err != nil {
+		WHERE r.designer_id = $1`, designerID).Scan(&b.Released, &b.Pending, &b.Reversed); err != nil {
 		return b, err
 	}
 	if err := q.QueryRow(ctx, `

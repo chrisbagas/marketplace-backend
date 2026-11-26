@@ -52,6 +52,9 @@ type Payment struct {
 	PaidAt    *int64 `json:"paidAt,omitempty"`
 	ExpiresAt int64  `json:"expiresAt,omitempty"` // batas bayar (hanya saat menunggu pembayaran)
 	Gateway   string `json:"gateway,omitempty"`
+	// cara refund yang tersedia untuk pesanan ini: "" = transfer manual saja,
+	// "partial" = Midtrans (nominal bebas), "full" = Midtrans (hanya penuh)
+	RefundMode string `json:"refundMode,omitempty"`
 }
 
 // Shipment: data dari kurir, wajib ada sebelum pesanan berstatus "dikirim".
@@ -87,6 +90,11 @@ type Order struct {
 	CompletedAt    int64           `json:"completedAt,omitempty"`
 	Status         string          `json:"status"`
 	Timeline       []TimelineEntry `json:"timeline"`
+	// pembatalan / refund / komplain
+	ReprintOf string     `json:"reprintOf,omitempty"` // pesanan ini cetak ulang dari pesanan lain
+	Refunds   []Refund   `json:"refunds"`
+	Refunded  int        `json:"refunded"`
+	Complaint *Complaint `json:"complaint,omitempty"`
 }
 
 var phoneRe = regexp.MustCompile(`^\+?[0-9]{8,15}$`)
@@ -563,14 +571,16 @@ func (s *Server) confirmReceived(ctx context.Context, id string) error {
 	tag, err := s.pool.Exec(ctx, `
 		WITH done AS (
 			UPDATE orders SET status='selesai', completed_at=now()
-			WHERE id=$1 AND status='tiba' RETURNING id
+			WHERE id=$1 AND status='tiba'
+			  AND NOT EXISTS (SELECT 1 FROM complaints c WHERE c.order_id = $1 AND c.status = 'terbuka')
+			RETURNING id
 		)
 		INSERT INTO order_events (order_id, label) SELECT id, 'Pesanan diterima — dikonfirmasi pembeli' FROM done`, id)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return checkoutError("Pesanan bisa dikonfirmasi setelah kurir melaporkan paket tiba")
+		return checkoutError("Pesanan bisa dikonfirmasi setelah paket tiba dan tidak ada komplain yang terbuka")
 	}
 	return nil
 }
@@ -578,14 +588,19 @@ func (s *Server) confirmReceived(ctx context.Context, id string) error {
 // AutoCompleteOrders menyelesaikan pesanan "tiba" yang sudah lewat batas
 // konfirmasi. Mengembalikan jumlah pesanan yang diselesaikan.
 func (s *Server) AutoCompleteOrders(ctx context.Context, after time.Duration) (int64, error) {
+	// Komplain terbuka menahan selesai-otomatis; komplain yang sudah diputuskan
+	// (ditolak / dicetak ulang / direfund) memulai hitungan dari waktu keputusan.
 	tag, err := s.pool.Exec(ctx, `
 		WITH done AS (
-			UPDATE orders SET status='selesai', completed_at=now()
-			WHERE status='tiba' AND delivered_at <= now() - make_interval(secs => $1)
-			RETURNING id
+			UPDATE orders o SET status='selesai', completed_at=now()
+			WHERE o.status='tiba'
+			  AND NOT EXISTS (SELECT 1 FROM complaints c WHERE c.order_id = o.id AND c.status = 'terbuka')
+			  AND GREATEST(o.delivered_at, COALESCE((SELECT c.resolved_at FROM complaints c WHERE c.order_id = o.id), o.delivered_at))
+			      <= now() - make_interval(secs => $1)
+			RETURNING o.id
 		)
 		INSERT INTO order_events (order_id, label) SELECT id, $2 FROM done`,
-		after.Seconds(), "Selesai otomatis — "+humanDuration(after)+" setelah paket tiba tanpa konfirmasi")
+		after.Seconds(), "Selesai otomatis — "+humanDuration(after)+" setelah paket tiba / komplain diputuskan tanpa konfirmasi")
 	if err != nil {
 		return 0, err
 	}
@@ -700,8 +715,10 @@ type CreatorOrderItem struct {
 	DesignURI     string `json:"designUri,omitempty"`
 	Royalty       int    `json:"royalty"`       // sudah dibukukan, atau estimasi bila belum dibayar
 	RoyaltyBooked bool   `json:"royaltyBooked"` // true = pembayaran lunas, royalti tercatat
-	Buyer         string `json:"buyer"`         // nama depan + inisial saja (privasi pembeli)
-	City          string `json:"city"`
+	// bagian royalti yang ditarik kembali karena refund (Royalty = sisa bersihnya)
+	RoyaltyReversed int    `json:"royaltyReversed"`
+	Buyer           string `json:"buyer"` // nama depan + inisial saja (privasi pembeli)
+	City            string `json:"city"`
 }
 
 // GET /api/designer/orders (kreator; admin dengan ?designer=) — item pesanan
@@ -724,7 +741,7 @@ func (s *Server) getDesignerOrders(w http.ResponseWriter, r *http.Request) {
 		SELECT o.id, (extract(epoch FROM o.created_at)*1000)::bigint, o.status::text, p.status::text,
 		       oi.listing_id, oi.title, oi.type, oi.color, oi.size, oi.qty, oi.unit_price, COALESCE(oi.design_uri,''),
 		       COALESCE(ry.amount, (GREATEST(0, oi.unit_price - COALESCE(oi.base_price, pt.base_price)) * oi.qty)::int), ry.id IS NOT NULL,
-		       o.cust_name, o.cust_city
+		       COALESCE(ry.reversed_amount, 0), o.cust_name, o.cust_city
 		FROM order_items oi
 		JOIN orders o     ON o.id = oi.order_id
 		JOIN payments p   ON p.order_id = o.id
@@ -732,7 +749,7 @@ func (s *Server) getDesignerOrders(w http.ResponseWriter, r *http.Request) {
 		JOIN designs d    ON d.id = l.design_id
 		JOIN product_types pt ON pt.id = oi.type
 		LEFT JOIN royalties ry ON ry.order_item_id = oi.id
-		WHERE d.designer_id = $1 AND o.status::text <> 'dibatalkan'
+		WHERE d.designer_id = $1 AND (o.status::text <> 'dibatalkan' OR ry.id IS NOT NULL)
 		ORDER BY o.created_at DESC, oi.id
 		LIMIT 200`, designerID)
 	if err != nil {
@@ -742,24 +759,30 @@ func (s *Server) getDesignerOrders(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []CreatorOrderItem{}
 	orders := map[string]bool{}
-	summary := map[string]int{"orders": 0, "units": 0, "paidUnits": 0, "royaltyBooked": 0, "royaltyPending": 0}
+	summary := map[string]int{"orders": 0, "units": 0, "paidUnits": 0, "royaltyBooked": 0, "royaltyPending": 0, "royaltyReversed": 0}
 	for rows.Next() {
 		var it CreatorOrderItem
 		var name string
 		if err := rows.Scan(&it.OrderID, &it.CreatedAt, &it.Status, &it.PaymentStatus,
 			&it.ListingID, &it.Title, &it.Type, &it.Color, &it.Size, &it.Qty, &it.UnitPrice, &it.DesignURI,
-			&it.Royalty, &it.RoyaltyBooked, &name, &it.City); err != nil {
+			&it.Royalty, &it.RoyaltyBooked, &it.RoyaltyReversed, &name, &it.City); err != nil {
 			errJSON(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		it.Buyer = shortName(name)
 		items = append(items, it)
 		orders[it.OrderID] = true
-		summary["units"] += it.Qty
-		if it.RoyaltyBooked {
+		if it.Status != "dibatalkan" {
+			summary["units"] += it.Qty
+		}
+		summary["royaltyReversed"] += it.RoyaltyReversed
+		switch {
+		case it.Status == "dibatalkan":
+			// refunded order: only the reversal is interesting, it earns nothing
+		case it.RoyaltyBooked:
 			summary["paidUnits"] += it.Qty
 			summary["royaltyBooked"] += it.Royalty
-		} else {
+		default:
 			summary["royaltyPending"] += it.Royalty
 		}
 	}
@@ -899,5 +922,8 @@ func (s *Server) loadOrdersPage(ctx context.Context, where string, args []any, l
 		i := index[oid]
 		orders[i].Timeline = append(orders[i].Timeline, e)
 	}
-	return orders, evRows.Err()
+	if err := evRows.Err(); err != nil {
+		return nil, err
+	}
+	return orders, s.attachRefundData(ctx, orders, index)
 }

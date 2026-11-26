@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -29,6 +30,10 @@ type fakeMidtrans struct {
 	status   map[string]map[string]string // order_id gateway → field status
 	badAuth  int
 	snapCall int
+	cancels  []string         // order_id yang dibatalkan lewat Cancel API
+	refunds  []map[string]any // body setiap permintaan Refund
+	// refundFails: Refund API menjawab 412 (mis. metode tidak bisa direfund)
+	refundFails bool
 }
 
 func newFakeMidtrans(t *testing.T) *fakeMidtrans {
@@ -66,6 +71,40 @@ func newFakeMidtrans(t *testing.T) *fakeMidtrans {
 				return
 			}
 			json.NewEncoder(w).Encode(st)
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v2/") && strings.HasSuffix(r.URL.Path, "/cancel"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v2/"), "/cancel")
+			st, ok := f.status[id]
+			if !ok {
+				fmt.Fprint(w, `{"status_code":"404","status_message":"Transaction doesn't exist."}`)
+				return
+			}
+			if st["transaction_status"] != "pending" {
+				fmt.Fprint(w, `{"status_code":"412","status_message":"Merchant cannot modify the status of the transaction"}`)
+				return
+			}
+			f.cancels = append(f.cancels, id)
+			st["transaction_status"] = "cancel"
+			fmt.Fprintf(w, `{"status_code":"200","status_message":"Success, transaction is canceled","order_id":%q,"transaction_status":"cancel"}`, id)
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v2/") && strings.HasSuffix(r.URL.Path, "/refund"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v2/"), "/refund")
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			st, ok := f.status[id]
+			switch {
+			case !ok:
+				fmt.Fprint(w, `{"status_code":"404","status_message":"Transaction doesn't exist."}`)
+			case f.refundFails || st["transaction_status"] != "settlement" && st["transaction_status"] != "partial_refund":
+				fmt.Fprint(w, `{"status_code":"412","status_message":"Merchant cannot modify the status of the transaction"}`)
+			default:
+				f.refunds = append(f.refunds, body)
+				status := "partial_refund"
+				if gross, _ := strconv.ParseFloat(st["gross_amount"], 64); int(gross) == int(body["amount"].(float64)) {
+					status = "refund"
+				}
+				st["transaction_status"] = status
+				fmt.Fprintf(w, `{"status_code":"200","status_message":"Success, refund request is approved","order_id":%q,"transaction_status":%q,"refund_amount":"%d.00","refund_key":%q}`,
+					id, status, int(body["amount"].(float64)), body["refund_key"])
+			}
 		default:
 			http.NotFound(w, r)
 		}

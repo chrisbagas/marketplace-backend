@@ -269,7 +269,7 @@ func (s *Server) applyGatewayStatus(ctx context.Context, n *midtrans.Notificatio
 		result = "pending"
 	case "deny", "cancel", "failure":
 		// percobaan ini gagal; pesanan tetap menunggu dan bisa dicoba bayar lagi
-		if _, err := s.pool.Exec(ctx, `UPDATE payments SET status='failed' WHERE order_id=$1 AND status <> 'paid'`, orderID); err != nil {
+		if _, err := s.pool.Exec(ctx, `UPDATE payments SET status='failed' WHERE order_id=$1 AND status NOT IN ('paid', 'expired')`, orderID); err != nil {
 			return "", err
 		}
 		result = "failed"

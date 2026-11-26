@@ -25,6 +25,12 @@ type FinanceFlow struct {
 	Creators       int `json:"creators"`       // royalti kreator
 	GatewayFees    int `json:"gatewayFees"`    // estimasi biaya Midtrans
 	PlatformIncome int `json:"platformIncome"` // sisanya
+	// pembatalan, refund & cetak ulang (pesanan yang dibayar pada periode ini)
+	Refunded         int `json:"refunded"`         // dana dikembalikan ke pembeli (sudah dikurangkan dari platformIncome)
+	Refunds          int `json:"refunds"`          // jumlah refund
+	CreatorsReversed int `json:"creatorsReversed"` // royalti yang ditarik kembali (creators = sisa bersihnya)
+	Reprints         int `json:"reprints"`         // pesanan cetak ulang gratis
+	ReprintCost      int `json:"reprintCost"`      // tagihan produsen untuk cetak ulang (sudah ada di production + shippingCost)
 }
 
 type FinanceOwed struct {
@@ -41,30 +47,37 @@ func (s *Server) financeFlow(ctx context.Context, from, to time.Time) (FinanceFl
 	var f FinanceFlow
 	err := s.pool.QueryRow(ctx, `
 		WITH paid AS (
-			SELECT o.id, o.subtotal, o.shipping_cost, o.discount, p.amount, p.gateway_fee
+			SELECT o.id, o.subtotal, o.shipping_cost, o.discount, p.amount, p.gateway_fee, o.reprint_of
 			FROM orders o JOIN payments p ON p.order_id = o.id
 			WHERE p.status = 'paid'
 			  AND ($1::timestamptz IS NULL OR p.paid_at >= $1)
 			  AND ($2::timestamptz IS NULL OR p.paid_at <  $2)
 		)
-		SELECT count(*)::int,
+		SELECT count(*) FILTER (WHERE reprint_of IS NULL)::int,
 		       COALESCE(sum(amount), 0)::int, COALESCE(sum(subtotal), 0)::int,
 		       COALESCE(sum(shipping_cost), 0)::int, COALESCE(sum(discount), 0)::int,
 		       COALESCE(sum(gateway_fee), 0)::int,
 		       COALESCE((SELECT sum(c.amount) FROM producer_charges c WHERE c.kind = 'produksi' AND c.order_id IN (SELECT id FROM paid)), 0)::int,
 		       COALESCE((SELECT sum(c.amount) FROM producer_charges c WHERE c.kind = 'ongkir'   AND c.order_id IN (SELECT id FROM paid)), 0)::int,
 		       COALESCE((SELECT sum(r.amount) FROM royalties r JOIN order_items oi ON oi.id = r.order_item_id
-		                 WHERE oi.order_id IN (SELECT id FROM paid)), 0)::int
+		                 WHERE oi.order_id IN (SELECT id FROM paid)), 0)::int,
+		       COALESCE((SELECT sum(r.reversed_amount) FROM royalties r JOIN order_items oi ON oi.id = r.order_item_id
+		                 WHERE oi.order_id IN (SELECT id FROM paid)), 0)::int,
+		       COALESCE((SELECT sum(rf.amount) FROM refunds rf WHERE rf.order_id IN (SELECT id FROM paid)), 0)::int,
+		       COALESCE((SELECT count(*) FROM refunds rf WHERE rf.order_id IN (SELECT id FROM paid)), 0)::int,
+		       count(*) FILTER (WHERE reprint_of IS NOT NULL)::int,
+		       COALESCE((SELECT sum(c.amount) FROM producer_charges c WHERE c.order_id IN (SELECT id FROM paid WHERE reprint_of IS NOT NULL)), 0)::int
 		FROM paid`, nullTime(from), nullTime(to)).Scan(
 		&f.Orders, &f.Received, &f.Subtotal, &f.Shipping, &f.Discount, &f.GatewayFees,
-		&f.Production, &f.ShippingCost, &f.Creators)
-	f.PlatformIncome = f.Received - f.Production - f.ShippingCost - f.Creators - f.GatewayFees
+		&f.Production, &f.ShippingCost, &f.Creators, &f.CreatorsReversed, &f.Refunded, &f.Refunds,
+		&f.Reprints, &f.ReprintCost)
+	f.PlatformIncome = f.Received - f.Refunded - f.Production - f.ShippingCost - f.Creators - f.GatewayFees
 	return f, err
 }
 
 func (s *Server) financeOwed(ctx context.Context) (FinanceOwed, error) {
 	var o FinanceOwed
-	var received, fees, creatorPaid, producerPaid, creatorsBooked int
+	var received, fees, creatorPaid, producerPaid, creatorsBooked, refunded int
 	err := s.pool.QueryRow(ctx, `
 		SELECT
 		  COALESCE((SELECT sum(c.amount) FROM producer_charges c JOIN orders o ON o.id = c.order_id
@@ -78,11 +91,12 @@ func (s *Server) financeOwed(ctx context.Context) (FinanceOwed, error) {
 		  COALESCE((SELECT sum(amount) FROM payments WHERE status = 'paid'), 0)::int,
 		  COALESCE((SELECT sum(gateway_fee) FROM payments WHERE status = 'paid'), 0)::int,
 		  COALESCE((SELECT sum(amount) FROM payouts WHERE status = 'dibayar'), 0)::int,
-		  COALESCE((SELECT sum(amount) FROM producer_payouts), 0)::int`).Scan(
+		  COALESCE((SELECT sum(amount) FROM producer_payouts), 0)::int,
+		  COALESCE((SELECT sum(amount) FROM refunds), 0)::int`).Scan(
 		&o.ProducersReady, &o.ProducersInProduction, &o.CreatorsHeld, &creatorsBooked,
-		&received, &fees, &creatorPaid, &producerPaid)
+		&received, &fees, &creatorPaid, &producerPaid, &refunded)
 	o.CreatorsAvailable = max(0, creatorsBooked-o.CreatorsHeld-creatorPaid)
-	o.CashEstimate = received - fees - creatorPaid - producerPaid
+	o.CashEstimate = received - refunded - fees - creatorPaid - producerPaid
 	o.PlatformCash = o.CashEstimate - o.ProducersReady - o.ProducersInProduction - o.CreatorsHeld - o.CreatorsAvailable
 	return o, err
 }
