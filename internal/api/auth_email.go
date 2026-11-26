@@ -169,7 +169,7 @@ func (s *Server) postForgotPassword(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusBadRequest, "Format email tidak valid")
 		return
 	}
-	if !s.limiter.allow("forgot-ip:"+clientIP(r), 10, time.Hour) ||
+	if !s.limiter.allow("forgot-ip:"+s.clientIP(r), 10, time.Hour) ||
 		!s.limiter.allow("forgot-email:"+email, 3, time.Hour) {
 		errJSON(w, http.StatusTooManyRequests, "Terlalu banyak permintaan. Coba lagi nanti.")
 		return
@@ -210,7 +210,7 @@ func (s *Server) postResetPassword(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusBadRequest, msg)
 		return
 	}
-	if !s.limiter.allow("reset-ip:"+clientIP(r), 20, time.Hour) {
+	if !s.limiter.allow("reset-ip:"+s.clientIP(r), 20, time.Hour) {
 		errJSON(w, http.StatusTooManyRequests, "Terlalu banyak percobaan. Coba lagi nanti.")
 		return
 	}

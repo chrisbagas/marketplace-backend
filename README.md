@@ -18,7 +18,7 @@ Saat pertama kali start, API otomatis:
 3. di luar produksi: memberi password ke akun demo (lihat di bawah).
 
 Konfigurasi lewat env var (lihat `.env.example`): `DATABASE_URL`, `PORT` (default 8081),
-`UPLOAD_DIR`, `APP_ENV`, `DEMO_PASSWORD`, `COOKIE_SECURE`, `APP_URL`, `SMTP_*`, `MAIL_FROM`, `GOOGLE_*`.
+`UPLOAD_DIR`, `APP_ENV`, `DEMO_PASSWORD`, `COOKIE_SECURE`, `APP_URL`, `SMTP_*`, `MAIL_FROM`, `GOOGLE_*`, `TRUSTED_PROXY_HOPS` (jumlah proxy tepercaya untuk `X-Forwarded-For`; default 0, produksi di balik Caddy → Next.js diperkirakan 2 — konfirmasi di staging).
 
 ## Autentikasi
 

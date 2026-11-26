@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,9 +71,10 @@ func main() {
 	}
 
 	authCfg := api.AuthConfig{
-		CookieSecure: production || os.Getenv("COOKIE_SECURE") == "true",
-		AppURL:       envOr("APP_URL", "http://localhost:3000"),
-		Mailer:       newMailer(production),
+		CookieSecure:     production || os.Getenv("COOKIE_SECURE") == "true",
+		AppURL:           envOr("APP_URL", "http://localhost:3000"),
+		TrustedProxyHops: trustedProxyHops(),
+		Mailer:           newMailer(production),
 		Google: api.GoogleConfig{
 			ClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 			ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
@@ -91,6 +93,21 @@ func main() {
 	if err := http.ListenAndServe(":"+port, srv); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// trustedProxyHops reads TRUSTED_PROXY_HOPS (default 0). A bad value stops the
+// API: silently falling back to 0 would make every client share one IP behind
+// a proxy.
+func trustedProxyHops() int {
+	v := os.Getenv("TRUSTED_PROXY_HOPS")
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 {
+		log.Fatalf("TRUSTED_PROXY_HOPS harus bilangan bulat >= 0, dapat %q", v)
+	}
+	return n
 }
 
 func envOr(key, def string) string {

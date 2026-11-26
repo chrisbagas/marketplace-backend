@@ -41,6 +41,9 @@ type AuthConfig struct {
 	AppURL       string // origin frontend untuk link di email, mis. http://localhost:3000
 	Mailer       mail.Mailer
 	Google       GoogleConfig
+	// Number of trusted reverse proxies in front of the API (TRUSTED_PROXY_HOPS).
+	// 0 = ignore X-Forwarded-For and use the TCP peer address.
+	TrustedProxyHops int
 }
 
 type DesignerRef struct {
@@ -131,7 +134,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, userID str
 	ctx := r.Context()
 	if _, err := s.pool.Exec(ctx,
 		`INSERT INTO sessions (id, user_id, expires_at, user_agent, ip) VALUES ($1,$2,$3,$4,$5)`,
-		hashToken(token), userID, time.Now().Add(sessionTTL), truncate(r.UserAgent(), 300), clientIP(r)); err != nil {
+		hashToken(token), userID, time.Now().Add(sessionTTL), truncate(r.UserAgent(), 300), s.clientIP(r)); err != nil {
 		return err
 	}
 	_, _ = s.pool.Exec(ctx, `UPDATE users SET last_login_at = now() WHERE id = $1`, userID)
@@ -219,7 +222,7 @@ func (s *Server) getProviders(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/auth/signup {username, email, password, name, asCreator, city}
 func (s *Server) postSignup(w http.ResponseWriter, r *http.Request) {
-	if !s.limiter.allow("signup:"+clientIP(r), 10, time.Hour) {
+	if !s.limiter.allow("signup:"+s.clientIP(r), 10, time.Hour) {
 		errJSON(w, http.StatusTooManyRequests, "Terlalu banyak percobaan. Coba lagi nanti.")
 		return
 	}
@@ -300,7 +303,7 @@ func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusBadRequest, "Isi username/email dan password")
 		return
 	}
-	if !s.limiter.allow("login-ip:"+clientIP(r), 30, 15*time.Minute) ||
+	if !s.limiter.allow("login-ip:"+s.clientIP(r), 30, 15*time.Minute) ||
 		!s.limiter.allow("login-id:"+ident, 10, 15*time.Minute) {
 		errJSON(w, http.StatusTooManyRequests, "Terlalu banyak percobaan masuk. Coba lagi dalam 15 menit.")
 		return
@@ -430,15 +433,31 @@ func truncate(s string, n int) string {
 	return s
 }
 
-// clientIP: request datang lewat proxy Next, jadi ambil X-Forwarded-For pertama.
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		ip, _, _ := strings.Cut(xff, ",")
-		return strings.TrimSpace(ip)
+// clientIP returns the address used for rate limiting and session records.
+// X-Forwarded-For is client-controlled, so it is only consulted when the API
+// sits behind TRUSTED_PROXY_HOPS trusted proxies.
+func (s *Server) clientIP(r *http.Request) string {
+	return pickClientIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"), s.auth.TrustedProxyHops)
+}
+
+// pickClientIP: hops = 0 uses the TCP peer and ignores xff. hops = N takes the
+// Nth entry counting from the right (each trusted proxy appends the address it
+// received the request from, so entries further left are client-supplied);
+// if xff has fewer entries, the leftmost is used.
+func pickClientIP(remoteAddr, xff string, hops int) string {
+	if hops > 0 && strings.TrimSpace(xff) != "" {
+		parts := strings.Split(xff, ",")
+		i := len(parts) - hops
+		if i < 0 {
+			i = 0
+		}
+		if ip := strings.TrimSpace(parts[i]); ip != "" {
+			return ip
+		}
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		return remoteAddr
 	}
 	return host
 }
