@@ -35,6 +35,12 @@ var errBadToken = errors.New("token tidak valid")
 // newAuthToken membuat token baru dan membatalkan token lama yang belum
 // dipakai untuk tujuan yang sama (hanya link terbaru yang berlaku).
 func (s *Server) newAuthToken(ctx context.Context, userID, purpose string, ttl time.Duration) (string, error) {
+	return s.newAuthTokenPayload(ctx, userID, purpose, ttl, "")
+}
+
+// newAuthTokenPayload sama seperti newAuthToken, dengan data yang terikat pada
+// token (mis. email baru untuk 'change_email').
+func (s *Server) newAuthTokenPayload(ctx context.Context, userID, purpose string, ttl time.Duration, payload string) (string, error) {
 	token := randomToken()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -46,8 +52,8 @@ func (s *Server) newAuthToken(ctx context.Context, userID, purpose string, ttl t
 		return "", err
 	}
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO auth_tokens (id, user_id, purpose, expires_at) VALUES ($1,$2,$3,$4)`,
-		hashToken(token), userID, purpose, time.Now().Add(ttl)); err != nil {
+		`INSERT INTO auth_tokens (id, user_id, purpose, expires_at, payload) VALUES ($1,$2,$3,$4,$5)`,
+		hashToken(token), userID, purpose, time.Now().Add(ttl), payload); err != nil {
 		return "", err
 	}
 	return token, tx.Commit(ctx)
@@ -55,15 +61,20 @@ func (s *Server) newAuthToken(ctx context.Context, userID, purpose string, ttl t
 
 // consumeAuthToken menandai token terpakai secara atomik dan mengembalikan pemiliknya.
 func consumeAuthToken(ctx context.Context, tx pgx.Tx, token, purpose string) (string, error) {
-	var userID string
-	err := tx.QueryRow(ctx, `
+	userID, _, err := consumeAuthTokenPayload(ctx, tx, token, purpose)
+	return userID, err
+}
+
+// consumeAuthTokenPayload: seperti consumeAuthToken, plus data yang terikat pada token.
+func consumeAuthTokenPayload(ctx context.Context, tx pgx.Tx, token, purpose string) (userID, payload string, err error) {
+	err = tx.QueryRow(ctx, `
 		UPDATE auth_tokens SET used_at = now()
 		WHERE id = $1 AND purpose = $2 AND used_at IS NULL AND expires_at > now()
-		RETURNING user_id`, hashToken(token), purpose).Scan(&userID)
+		RETURNING user_id, payload`, hashToken(token), purpose).Scan(&userID, &payload)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", errBadToken
+		return "", "", errBadToken
 	}
-	return userID, err
+	return userID, payload, err
 }
 
 func (s *Server) link(path, token string) string {
@@ -177,7 +188,7 @@ func (s *Server) postForgotPassword(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	var userID, name string
-	err := s.pool.QueryRow(ctx, `SELECT id, name FROM users WHERE lower(email) = $1`, email).Scan(&userID, &name)
+	err := s.pool.QueryRow(ctx, `SELECT id, name FROM users WHERE lower(email) = $1 AND deleted_at IS NULL`, email).Scan(&userID, &name)
 	if err == nil {
 		token, err := s.newAuthToken(ctx, userID, purposeReset, resetTTL)
 		if err != nil {

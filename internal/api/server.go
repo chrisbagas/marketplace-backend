@@ -51,6 +51,13 @@ func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
 	s.route("POST /api/auth/verify-email/resend", "/api/auth", s.authed(s.postResendVerification))
 	s.route("POST /api/auth/password/forgot", "/api/auth", s.postForgotPassword)
 	s.route("POST /api/auth/password/reset", "/api/auth", s.postResetPassword)
+	// pengaturan akun (/akun): konfirmasi email publik (token dari email), sisanya wajib login
+	s.route("POST /api/account/password", "/api/account", s.authed(s.postChangePassword))
+	s.route("POST /api/account/email", "/api/account", s.authed(s.postChangeEmail))
+	s.route("POST /api/account/email/confirm", "/api/account", s.postConfirmEmailChange)
+	s.route("GET /api/account/deletion", "/api/account", s.authed(s.getDeletionCheck))
+	s.route("POST /api/account/delete/request", "/api/account", s.authed(s.postDeleteRequest))
+	s.route("POST /api/account/delete", "/api/account", s.authed(s.postDeleteAccount))
 	s.route("GET /api/auth/google/start", "/api/auth/google", s.googleStart)
 	s.route("GET /api/auth/google/callback", "/api/auth/google", s.googleCallback)
 

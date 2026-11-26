@@ -96,7 +96,7 @@ func (s *Server) sessionUser(r *http.Request) (*User, error) {
 	}
 	return s.loadUser(r.Context(), `
 		JOIN sessions s ON s.user_id = u.id
-		WHERE s.id = $1 AND s.expires_at > now()`, hashToken(c.Value))
+		WHERE s.id = $1 AND s.expires_at > now() AND u.deleted_at IS NULL`, hashToken(c.Value))
 }
 
 func (s *Server) loadUser(ctx context.Context, where string, args ...any) (*User, error) {
@@ -309,7 +309,7 @@ func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
 	var userID string
 	var hash *string
 	err := s.pool.QueryRow(r.Context(),
-		`SELECT id, password_hash FROM users WHERE lower(username) = $1 OR lower(email) = $1 LIMIT 1`, ident).
+		`SELECT id, password_hash FROM users WHERE deleted_at IS NULL AND (lower(username) = $1 OR lower(email) = $1) LIMIT 1`, ident).
 		Scan(&userID, &hash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(body.Password))

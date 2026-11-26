@@ -7,7 +7,7 @@ Database: **PostgreSQL 16** · skema penuh di [`internal/db/schema.sql`](interna
 
 | Kelompok | Tabel |
 |---|---|
-| **Identitas** | `users` (profil + preferensi + kredensial), `sessions` (sesi login), `auth_tokens` (link verifikasi & reset password), `designers`, `user_designs` (desain custom pribadi — tanpa royalti) |
+| **Identitas** | `users` (profil + preferensi + kredensial), `sessions` (sesi login), `auth_tokens` (link verifikasi, reset password, ganti email, konfirmasi hapus akun), `designers`, `user_designs` (desain custom pribadi — tanpa royalti) |
 | **Katalog** | `product_types`, `colors`, `product_type_colors`, `product_type_sizes`, `designs`, `listings`, `categories` (product tree), `attributes`, `attribute_values`, `design_attributes` |
 | **Pencarian** | `listing_search` (search document per listing), `search_words` (vocabulary for typo correction), `search_synonyms` |
 | **Transaksi** | `orders`, `order_items`, `payments`, `order_events`, `reviews` (ulasan terverifikasi + moderasi), `vouchers`, `payment_notifications` (jejak webhook/sync gateway) |
@@ -70,14 +70,16 @@ erDiagram
         text google_sub UK "nullable"
         bool email_verified
         timestamptz last_login_at "nullable"
+        timestamptz deleted_at "nullable; terisi = akun dianonimkan (migration 020)"
         timestamptz created_at
     }
     auth_tokens {
         text id PK "sha256(token)"
         text user_id FK
-        auth_token_purpose purpose "verify_email | reset_password"
+        auth_token_purpose purpose "verify_email | reset_password | change_email | delete_account"
         timestamptz expires_at "24 jam / 30 menit"
         timestamptz used_at "NULL = belum dipakai"
+        text payload "data terikat token; change_email = email baru (migration 020)"
     }
     sessions {
         text id PK "sha256(token) — token mentah hanya di cookie"
@@ -437,6 +439,20 @@ erDiagram
   `listing_id NULL` → otomatis tak pernah menghasilkan royalti dan tak tampil di katalog.
 - **Gambar** disimpan sebagai file (`uploads/` lokal; S3/R2 di produksi) — database hanya
   menyimpan URL.
+- **Pengaturan akun & hapus akun** (migration 020, `internal/api/account.go`): `auth_tokens.payload`
+  mengikat email baru ke token `change_email`, sehingga alamat tujuan tidak bisa diganti setelah
+  link dikirim; `users.email` baru berganti saat link dikonfirmasi. Menghapus akun = **anonimisasi**,
+  bukan `DELETE`: baris `users` tetap (`deleted_at` terisi) agar `orders.user_id` /
+  `designers.user_id` tidak putus; `email` → `deleted+<id>@deleted.invalid`, `username` →
+  `deleted-<id>`, nama → "Pengguna dihapus", telepon/alamat/preferensi dikosongkan,
+  `password_hash` & `google_sub` NULL (email/username lama bebas dipakai akun baru). Sesi, token,
+  dan `user_designs` dihapus. Pesanan tetap lengkap dengan item/harga/pembayaran, tetapi identitas
+  pembeli di `orders` (`cust_*`, `notes`) dikosongkan dan `reviews.author` diganti. Kreator:
+  listing dinonaktifkan, pengajuan `review` ditolak, `designers` (nama/bio/rekening) dikosongkan;
+  royalti, desain, dan riwayat `payouts` (termasuk salinan rekening saat transfer — catatan
+  keuangan) dipertahankan. Penghalang: pesanan sendiri belum `selesai`/`dibatalkan`, penarikan
+  `diminta`/`diproses`, royalti tertahan, atau saldo tersedia ≥ `PayoutMinimum`; akun admin tidak
+  bisa dihapus. Saldo tersedia di bawah minimum tidak bisa ditarik, jadi hangus saat akun dihapus.
 
 ## Cara pakai
 

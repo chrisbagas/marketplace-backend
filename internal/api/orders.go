@@ -72,6 +72,7 @@ type Order struct {
 	CreatedAt   int64      `json:"createdAt"`
 	UserID      string     `json:"userId,omitempty"`
 	Username    string     `json:"username,omitempty"` // akun pemesan (kosong = guest lama)
+	UserDeleted bool       `json:"userDeleted,omitempty"` // akun pemesan sudah dihapus (dianonimkan)
 	Customer    Customer   `json:"customer"`
 	Notes       string     `json:"notes,omitempty"`
 	Items       []CartLine `json:"items"`
@@ -804,7 +805,8 @@ func (s *Server) loadOrders(ctx context.Context, limit int) ([]Order, error) {
 func (s *Server) loadOrdersPage(ctx context.Context, where string, args []any, limit, offset int) ([]Order, error) {
 	query := fmt.Sprintf(`
 		SELECT o.id, (extract(epoch FROM o.created_at)*1000)::bigint,
-		       COALESCE(o.user_id,''), COALESCE(u.username,''),
+		       COALESCE(o.user_id,''), CASE WHEN u.deleted_at IS NULL THEN COALESCE(u.username,'') ELSE '' END,
+		       COALESCE(u.deleted_at IS NOT NULL, false),
 		       o.cust_name, o.cust_email, o.cust_phone, o.cust_address, o.cust_city, o.cust_postal, o.notes,
 		       o.subtotal, o.courier, o.shipping_cost, o.discount, COALESCE(o.voucher_code,''), o.total, o.status,
 		       p.method, p.status, p.ref,
@@ -832,7 +834,7 @@ func (s *Server) loadOrdersPage(ctx context.Context, where string, args []any, l
 	for rows.Next() {
 		var o Order
 		var ship Shipment
-		if err := rows.Scan(&o.ID, &o.CreatedAt, &o.UserID, &o.Username,
+		if err := rows.Scan(&o.ID, &o.CreatedAt, &o.UserID, &o.Username, &o.UserDeleted,
 			&o.Customer.Name, &o.Customer.Email, &o.Customer.Phone, &o.Customer.Address, &o.Customer.City,
 			&o.Customer.Postal, &o.Notes,
 			&o.Subtotal, &o.Shipping.Courier, &o.Shipping.Cost, &o.Discount, &o.VoucherCode, &o.Total, &o.Status,

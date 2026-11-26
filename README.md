@@ -67,6 +67,12 @@ peran salah → `403`.
 | `/api/auth/verify-email/resend` | POST | login | Kirim ulang link verifikasi |
 | `/api/auth/password/forgot` | POST | publik | `{email}` → kirim link reset (respons selalu sama) |
 | `/api/auth/password/reset` | POST | publik | `{token, password}` → password baru + sesi baru |
+| `/api/account/password` | POST | login | `{currentPassword, newPassword}` → ganti password, sesi lain dicabut, sesi ini tetap |
+| `/api/account/email` | POST | login | `{newEmail, password}` → kirim link konfirmasi ke email baru (email berganti setelah dikonfirmasi) |
+| `/api/account/email/confirm` | POST | publik | `{token}` dari link email baru → email berganti, alamat lama diberi tahu |
+| `/api/account/deletion` | GET | login | `{blockers, hasPassword}` — alasan akun belum bisa dihapus |
+| `/api/account/delete/request` | POST | login | Akun tanpa password (Google): kirim link konfirmasi penghapusan ke email akun |
+| `/api/account/delete` | POST | login | `{password}` atau `{token}` (akun tanpa password) → anonimkan akun |
 | `/api/auth/google/start`, `/callback` | GET | publik | Alur OAuth Google (redirect) |
 | `/api/products`, `/api/products/{id}` | GET | publik | Katalog (daftar tanpa halaman + detail) |
 | `/api/search` | GET | publik | Pencarian katalog: `q`, `type`, `category`, `attr`, `color`, `min`, `max`, `designer`, `sort`, `page`, `limit` → produk + jumlah per filter |
