@@ -63,6 +63,9 @@ var printAreas = map[string][2]float64{
 	"kaos": {30, 40}, "hoodie": {28, 30}, "mug": {9, 8.5}, "totebag": {25, 30},
 }
 
+// package weight per pcs (gram) used for shipping rates — same as migration 018
+var seedWeightG = map[string]int{"kaos": 200, "hoodie": 600, "mug": 400, "totebag": 150}
+
 // AvatarURI: foto profil bawaan — inisial di atas warna khas kreator.
 // Sama dengan backfill di migrations/003 dan lib/avatar.ts di frontend.
 func AvatarURI(hue int, name string) string {
@@ -146,10 +149,10 @@ func SeedIfEmpty(ctx context.Context, pool *pgxpool.Pool) error {
 	for id, pt := range cat.ProductTypes {
 		area := printAreas[id]
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO product_types (id, label, base_price, print_max_w_cm, print_max_h_cm, category_id, sort, producer_id, production_cost)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,'vendor-utama',LEAST($3::int, $8::int))`,
+			`INSERT INTO product_types (id, label, base_price, print_max_w_cm, print_max_h_cm, category_id, sort, producer_id, production_cost, weight_g)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,'vendor-utama',LEAST($3::int, $8::int),$9)`,
 			id, pt.Label, pt.Base, area[0], area[1], nilIfBlank(seedTypeCategories[id].category), seedTypeCategories[id].sort,
-			PlaceholderProductionCost[id]); err != nil {
+			PlaceholderProductionCost[id], seedWeightG[id]); err != nil {
 			return err
 		}
 		for i, s := range pt.Sizes {

@@ -86,6 +86,7 @@ func main() {
 	log.Printf("KaryaKita API siap di http://localhost:%s (db ok, skema termigrasi, upload → %s)", port, uploadDir)
 	srv := api.NewServer(pool, uploadDir, authCfg)
 	srv.SetPayments(newPayments(production))
+	srv.SetShipping(newShipping())
 	// pesanan "tiba" selesai otomatis 2 hari setelah paket sampai (dicek tiap 10 menit)
 	go srv.RunOrderJobs(ctx, 10*time.Minute)
 	if err := http.ListenAndServe(":"+port, srv); err != nil {

@@ -38,11 +38,14 @@ type Customer struct {
 	Address string `json:"address"`
 	City    string `json:"city"`
 	Postal  string `json:"postal"`
+	AreaID  string `json:"areaId,omitempty"` // Biteship area id tujuan (kosong = tarif flat)
 }
 
 type Shipping struct {
 	Courier string `json:"courier"`
 	Cost    int    `json:"cost"`
+	Company string `json:"company,omitempty"` // kode kurir Biteship (mis. jne); kosong = tarif flat
+	Type    string `json:"type,omitempty"`
 }
 
 type Payment struct {
@@ -59,7 +62,8 @@ type Shipment struct {
 	Courier        string `json:"courier"`
 	TrackingNumber string `json:"trackingNumber"`
 	ShippedAt      int64  `json:"shippedAt"`
-	DeliveredAt    int64  `json:"deliveredAt,omitempty"` // laporan kurir: paket sampai
+	DeliveredAt    int64  `json:"deliveredAt,omitempty"`   // laporan kurir: paket sampai
+	CourierStatus  string `json:"courierStatus,omitempty"` // status pelacakan Biteship terakhir
 }
 
 type TimelineEntry struct {
@@ -98,6 +102,7 @@ func validCustomer(c *Customer, fallbackEmail string) error {
 	trim(&c.Address, 300)
 	trim(&c.City, 60)
 	trim(&c.Postal, 10)
+	trim(&c.AreaID, 80)
 	c.Email = strings.ToLower(strings.TrimSpace(c.Email))
 	c.Phone = strings.NewReplacer(" ", "", "-", "", ".", "", "(", "", ")", "").Replace(strings.TrimSpace(c.Phone))
 	if c.Email == "" {
@@ -141,7 +146,7 @@ func (s *Server) postOrder(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, ok := courierByID(body.Courier); !ok {
+	if _, ok := courierByID(body.Courier); !ok && !s.shipping.enabled() {
 		errJSON(w, http.StatusBadRequest, "Pilih kurir pengiriman")
 		return
 	}
@@ -155,7 +160,13 @@ func (s *Server) postOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 
-	quote, err := quoteOrder(ctx, tx, u, body.Items, body.Courier, body.Voucher, true)
+	quote, err := quoteOrder(ctx, tx, u, body.Items, body.Courier, body.Voucher, true,
+		shipTarget{cfg: &s.shipping, areaID: body.Customer.AreaID})
+	if errors.Is(err, errShippingDown) {
+		log.Printf("buat pesanan: %v", err)
+		errJSON(w, http.StatusBadGateway, "Ongkir belum bisa dihitung. Coba lagi sebentar lagi.")
+		return
+	}
 	var ce checkoutError
 	if errors.As(err, &ce) {
 		errJSON(w, http.StatusBadRequest, ce.Error())
@@ -187,6 +198,18 @@ func (s *Server) postOrder(w http.ResponseWriter, r *http.Request) {
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
 		id, u.ID, c.Name, c.Email, c.Phone, c.Address, c.City, c.Postal, notes,
 		quote.Subtotal, quote.Courier.ID, quote.Shipping, quote.Discount, voucherCode, quote.Total); err != nil {
+		errJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if quote.Provider == "biteship" {
+		company, ctype := splitCourierID(quote.Courier.ID)
+		if _, err := tx.Exec(ctx, `
+			UPDATE orders SET dest_area_id=$2, weight_g=$3, courier=$4, courier_company=$5, courier_type=$6 WHERE id=$1`,
+			id, c.AreaID, quote.Weight, quote.Courier.Label, company, ctype); err != nil {
+			errJSON(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	} else if _, err := tx.Exec(ctx, `UPDATE orders SET weight_g=$2 WHERE id=$1`, id, quote.Weight); err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -225,6 +248,12 @@ func (s *Server) postOrder(w http.ResponseWriter, r *http.Request) {
 			u.ID, c.Phone, c.Address, c.City, c.Postal); err != nil {
 			errJSON(w, http.StatusInternalServerError, err.Error())
 			return
+		}
+		if quote.Provider == "biteship" {
+			if _, err := tx.Exec(ctx, `UPDATE users SET area_id=$2 WHERE id=$1`, u.ID, c.AreaID); err != nil {
+				errJSON(w, http.StatusInternalServerError, err.Error())
+				return
+			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -382,7 +411,7 @@ func (s *Server) patchOrder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		err = s.confirmReceived(ctx, order.ID)
-	case "advance", "ship", "update-shipment", "delivered":
+	case "advance", "ship", "ship-biteship", "sync-shipment", "update-shipment", "delivered":
 		if !isAdmin {
 			errJSON(w, http.StatusForbidden, "Hanya admin yang bisa mengubah status pesanan")
 			return
@@ -394,6 +423,10 @@ func (s *Server) patchOrder(w http.ResponseWriter, r *http.Request) {
 			err = s.markDelivered(ctx, order.ID)
 		case "ship":
 			err = s.shipOrder(ctx, order.ID, body.Courier, body.TrackingNumber, false)
+		case "ship-biteship":
+			err = s.bookShipment(ctx, order.ID)
+		case "sync-shipment":
+			err = s.syncShipment(ctx, order.ID, true)
 		default:
 			err = s.shipOrder(ctx, order.ID, body.Courier, body.TrackingNumber, true)
 		}
@@ -404,6 +437,11 @@ func (s *Server) patchOrder(w http.ResponseWriter, r *http.Request) {
 	var ce checkoutError
 	if errors.As(err, &ce) {
 		errJSON(w, http.StatusBadRequest, ce.Error())
+		return
+	}
+	if errors.Is(err, errShippingDown) {
+		log.Printf("pengiriman %s: %v", order.ID, err)
+		errJSON(w, http.StatusBadGateway, "Biteship tidak bisa dihubungi. Coba lagi sebentar lagi, atau isi resi manual.")
 		return
 	}
 	if isUniqueViolation(err) {
@@ -636,6 +674,11 @@ var trackingRe = regexp.MustCompile(`^[A-Z0-9][A-Z0-9-]{5,29}$`)
 // shipOrder mencatat data kurir. update=false: produksi → dikirim;
 // update=true: koreksi resi pesanan yang sudah dikirim (status tidak berubah).
 func (s *Server) shipOrder(ctx context.Context, id, courier, tracking string, update bool) error {
+	return s.shipOrderWith(ctx, id, courier, tracking, update, nil)
+}
+
+// shipOrderWith = shipOrder + extra, yang dijalankan di transaksi yang sama sebelum commit.
+func (s *Server) shipOrderWith(ctx context.Context, id, courier, tracking string, update bool, extra func(pgx.Tx) error) error {
 	courier = truncate(strings.TrimSpace(courier), 40)
 	tracking = strings.ToUpper(strings.Join(strings.Fields(tracking), ""))
 	if courier == "" {
@@ -674,6 +717,11 @@ func (s *Server) shipOrder(ctx context.Context, id, courier, tracking string, up
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO order_events (order_id, label) VALUES ($1,$2)`, id, label); err != nil {
 		return err
+	}
+	if extra != nil {
+		if err := extra(tx); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }
@@ -806,6 +854,7 @@ func (s *Server) loadOrdersPage(ctx context.Context, where string, args []any, l
 		SELECT o.id, (extract(epoch FROM o.created_at)*1000)::bigint,
 		       COALESCE(o.user_id,''), COALESCE(u.username,''),
 		       o.cust_name, o.cust_email, o.cust_phone, o.cust_address, o.cust_city, o.cust_postal, o.notes,
+		       o.dest_area_id, o.courier_company, o.courier_type, COALESCE(o.courier_status,''),
 		       o.subtotal, o.courier, o.shipping_cost, o.discount, COALESCE(o.voucher_code,''), o.total, o.status,
 		       p.method, p.status, p.ref,
 		       (extract(epoch FROM p.paid_at)*1000)::bigint,
@@ -835,6 +884,7 @@ func (s *Server) loadOrdersPage(ctx context.Context, where string, args []any, l
 		if err := rows.Scan(&o.ID, &o.CreatedAt, &o.UserID, &o.Username,
 			&o.Customer.Name, &o.Customer.Email, &o.Customer.Phone, &o.Customer.Address, &o.Customer.City,
 			&o.Customer.Postal, &o.Notes,
+			&o.Customer.AreaID, &o.Shipping.Company, &o.Shipping.Type, &ship.CourierStatus,
 			&o.Subtotal, &o.Shipping.Courier, &o.Shipping.Cost, &o.Discount, &o.VoucherCode, &o.Total, &o.Status,
 			&o.Payment.Method, &o.Payment.Status, &o.Payment.Ref, &o.Payment.PaidAt,
 			&ship.Courier, &ship.TrackingNumber, &ship.ShippedAt, &ship.DeliveredAt, &o.CompletedAt); err != nil {

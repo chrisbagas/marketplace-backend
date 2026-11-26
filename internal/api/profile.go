@@ -17,6 +17,7 @@ type Profile struct {
 	Address          string         `json:"address"`
 	City             string         `json:"city"`
 	Postal           string         `json:"postal"`
+	AreaID           string         `json:"areaId"` // Biteship area id tujuan
 	PreferredPayment string         `json:"preferredPayment"`
 	PreferredCourier string         `json:"preferredCourier"`
 	Settings         map[string]any `json:"settings"`
@@ -26,9 +27,9 @@ func (s *Server) getProfile(w http.ResponseWriter, r *http.Request) {
 	var p Profile
 	var settings []byte
 	err := s.pool.QueryRow(r.Context(), `
-		SELECT id, name, email, phone, address, city, postal_code, preferred_payment, preferred_courier, settings
+		SELECT id, name, email, phone, address, city, postal_code, area_id, preferred_payment, preferred_courier, settings
 		FROM users WHERE id = $1`, userFrom(r).ID).
-		Scan(&p.ID, &p.Name, &p.Email, &p.Phone, &p.Address, &p.City, &p.Postal, &p.PreferredPayment, &p.PreferredCourier, &settings)
+		Scan(&p.ID, &p.Name, &p.Email, &p.Phone, &p.Address, &p.City, &p.Postal, &p.AreaID, &p.PreferredPayment, &p.PreferredCourier, &settings)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return
@@ -45,6 +46,7 @@ func (s *Server) patchProfile(w http.ResponseWriter, r *http.Request) {
 		Address          *string        `json:"address"`
 		City             *string        `json:"city"`
 		Postal           *string        `json:"postal"`
+		AreaID           *string        `json:"areaId"`
 		PreferredPayment *string        `json:"preferredPayment"`
 		PreferredCourier *string        `json:"preferredCourier"`
 		Settings         map[string]any `json:"settings"`
@@ -63,7 +65,7 @@ func (s *Server) patchProfile(w http.ResponseWriter, r *http.Request) {
 		return err
 	}
 	for col, v := range map[string]*string{
-		"name": body.Name, "phone": body.Phone, "address": body.Address, "city": body.City, "postal_code": body.Postal,
+		"name": body.Name, "phone": body.Phone, "address": body.Address, "city": body.City, "postal_code": body.Postal, "area_id": body.AreaID,
 		"preferred_payment": body.PreferredPayment, "preferred_courier": body.PreferredCourier,
 	} {
 		if err := set(col, v); err != nil {

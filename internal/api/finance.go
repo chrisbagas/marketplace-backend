@@ -22,6 +22,7 @@ type FinanceFlow struct {
 	Discount       int `json:"discount"`       // voucher, ditanggung platform
 	Production     int `json:"production"`     // hak produsen: biaya produksi
 	ShippingCost   int `json:"shippingCost"`   // hak produsen: ongkir (produsen yang mengirim)
+	CourierCosts   int `json:"courierCosts"`   // ongkos kurir Biteship yang dibayar platform (bukan lewat produsen)
 	Creators       int `json:"creators"`       // royalti kreator
 	GatewayFees    int `json:"gatewayFees"`    // estimasi biaya Midtrans
 	PlatformIncome int `json:"platformIncome"` // sisanya
@@ -41,7 +42,7 @@ func (s *Server) financeFlow(ctx context.Context, from, to time.Time) (FinanceFl
 	var f FinanceFlow
 	err := s.pool.QueryRow(ctx, `
 		WITH paid AS (
-			SELECT o.id, o.subtotal, o.shipping_cost, o.discount, p.amount, p.gateway_fee
+			SELECT o.id, o.subtotal, o.shipping_cost, o.discount, o.shipment_cost, p.amount, p.gateway_fee
 			FROM orders o JOIN payments p ON p.order_id = o.id
 			WHERE p.status = 'paid'
 			  AND ($1::timestamptz IS NULL OR p.paid_at >= $1)
@@ -50,21 +51,21 @@ func (s *Server) financeFlow(ctx context.Context, from, to time.Time) (FinanceFl
 		SELECT count(*)::int,
 		       COALESCE(sum(amount), 0)::int, COALESCE(sum(subtotal), 0)::int,
 		       COALESCE(sum(shipping_cost), 0)::int, COALESCE(sum(discount), 0)::int,
-		       COALESCE(sum(gateway_fee), 0)::int,
+		       COALESCE(sum(gateway_fee), 0)::int, COALESCE(sum(shipment_cost), 0)::int,
 		       COALESCE((SELECT sum(c.amount) FROM producer_charges c WHERE c.kind = 'produksi' AND c.order_id IN (SELECT id FROM paid)), 0)::int,
 		       COALESCE((SELECT sum(c.amount) FROM producer_charges c WHERE c.kind = 'ongkir'   AND c.order_id IN (SELECT id FROM paid)), 0)::int,
 		       COALESCE((SELECT sum(r.amount) FROM royalties r JOIN order_items oi ON oi.id = r.order_item_id
 		                 WHERE oi.order_id IN (SELECT id FROM paid)), 0)::int
 		FROM paid`, nullTime(from), nullTime(to)).Scan(
-		&f.Orders, &f.Received, &f.Subtotal, &f.Shipping, &f.Discount, &f.GatewayFees,
+		&f.Orders, &f.Received, &f.Subtotal, &f.Shipping, &f.Discount, &f.GatewayFees, &f.CourierCosts,
 		&f.Production, &f.ShippingCost, &f.Creators)
-	f.PlatformIncome = f.Received - f.Production - f.ShippingCost - f.Creators - f.GatewayFees
+	f.PlatformIncome = f.Received - f.Production - f.ShippingCost - f.CourierCosts - f.Creators - f.GatewayFees
 	return f, err
 }
 
 func (s *Server) financeOwed(ctx context.Context) (FinanceOwed, error) {
 	var o FinanceOwed
-	var received, fees, creatorPaid, producerPaid, creatorsBooked int
+	var received, fees, creatorPaid, producerPaid, creatorsBooked, courierPaid int
 	err := s.pool.QueryRow(ctx, `
 		SELECT
 		  COALESCE((SELECT sum(c.amount) FROM producer_charges c JOIN orders o ON o.id = c.order_id
@@ -78,11 +79,12 @@ func (s *Server) financeOwed(ctx context.Context) (FinanceOwed, error) {
 		  COALESCE((SELECT sum(amount) FROM payments WHERE status = 'paid'), 0)::int,
 		  COALESCE((SELECT sum(gateway_fee) FROM payments WHERE status = 'paid'), 0)::int,
 		  COALESCE((SELECT sum(amount) FROM payouts WHERE status = 'dibayar'), 0)::int,
-		  COALESCE((SELECT sum(amount) FROM producer_payouts), 0)::int`).Scan(
+		  COALESCE((SELECT sum(amount) FROM producer_payouts), 0)::int,
+		  COALESCE((SELECT sum(o.shipment_cost) FROM orders o JOIN payments p ON p.order_id = o.id WHERE p.status = 'paid'), 0)::int`).Scan(
 		&o.ProducersReady, &o.ProducersInProduction, &o.CreatorsHeld, &creatorsBooked,
-		&received, &fees, &creatorPaid, &producerPaid)
+		&received, &fees, &creatorPaid, &producerPaid, &courierPaid)
 	o.CreatorsAvailable = max(0, creatorsBooked-o.CreatorsHeld-creatorPaid)
-	o.CashEstimate = received - fees - creatorPaid - producerPaid
+	o.CashEstimate = received - fees - creatorPaid - producerPaid - courierPaid
 	o.PlatformCash = o.CashEstimate - o.ProducersReady - o.ProducersInProduction - o.CreatorsHeld - o.CreatorsAvailable
 	return o, err
 }
@@ -134,6 +136,7 @@ type ProductCost struct {
 	Label          string `json:"label"`
 	BasePrice      int    `json:"basePrice"`
 	ProductionCost int    `json:"productionCost"`
+	WeightG        int    `json:"weightG"` // berat per pcs untuk ongkir
 }
 
 type ProducerCharge struct {
@@ -206,13 +209,13 @@ func (s *Server) getProducers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) loadProducerDetail(ctx context.Context, p *Producer) error {
 	p.Products, p.Charges, p.Payouts = []ProductCost{}, []ProducerCharge{}, []ProducerPayout{}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, label, base_price, production_cost FROM product_types WHERE producer_id = $1 ORDER BY base_price`, p.ID)
+		SELECT id, label, base_price, production_cost, weight_g FROM product_types WHERE producer_id = $1 ORDER BY base_price`, p.ID)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var c ProductCost
-		if err := rows.Scan(&c.ID, &c.Label, &c.BasePrice, &c.ProductionCost); err != nil {
+		if err := rows.Scan(&c.ID, &c.Label, &c.BasePrice, &c.ProductionCost, &c.WeightG); err != nil {
 			rows.Close()
 			return err
 		}
@@ -307,14 +310,16 @@ func (s *Server) patchProducer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// PATCH /api/product-types/{id} {productionCost} — tarif vendor per pcs.
-// Hanya berlaku untuk pesanan BARU (pesanan lama menyimpan tarif saat checkout).
+// PATCH /api/product-types/{id} {productionCost?, weightG?} — tarif vendor per pcs
+// dan berat paket per pcs (dasar hitung ongkir). Berlaku untuk pesanan BARU
+// (pesanan lama menyimpan nilainya saat checkout).
 func (s *Server) patchProductType(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ProductionCost *int `json:"productionCost"`
+		WeightG        *int `json:"weightG"`
 	}
-	if err := readJSON(r, &body); err != nil || body.ProductionCost == nil {
-		errJSON(w, http.StatusBadRequest, "Isi biaya produksi")
+	if err := readJSON(r, &body); err != nil || (body.ProductionCost == nil && body.WeightG == nil) {
+		errJSON(w, http.StatusBadRequest, "Isi biaya produksi atau berat")
 		return
 	}
 	var base int
@@ -327,12 +332,21 @@ func (s *Server) patchProductType(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if c := *body.ProductionCost; c < 0 || c > base {
-		errJSON(w, http.StatusBadRequest, "Biaya produksi harus antara Rp0 dan harga dasar "+rupiah(base))
-		return
+	if body.ProductionCost != nil {
+		if c := *body.ProductionCost; c < 0 || c > base {
+			errJSON(w, http.StatusBadRequest, "Biaya produksi harus antara Rp0 dan harga dasar "+rupiah(base))
+			return
+		}
 	}
-	if _, err := s.pool.Exec(r.Context(), `UPDATE product_types SET production_cost=$2 WHERE id=$1`,
-		r.PathValue("id"), *body.ProductionCost); err != nil {
+	if body.WeightG != nil {
+		if g := *body.WeightG; g < 1 || g > 30_000 {
+			errJSON(w, http.StatusBadRequest, "Berat harus antara 1 dan 30.000 gram")
+			return
+		}
+	}
+	if _, err := s.pool.Exec(r.Context(), `
+		UPDATE product_types SET production_cost = COALESCE($2, production_cost), weight_g = COALESCE($3, weight_g) WHERE id=$1`,
+		r.PathValue("id"), body.ProductionCost, body.WeightG); err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return
 	}

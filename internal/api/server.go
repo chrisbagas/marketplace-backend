@@ -19,6 +19,7 @@ type Server struct {
 	auth      AuthConfig
 	limiter   *rateLimiter
 	payments  PaymentsConfig
+	shipping  ShippingConfig
 }
 
 func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
@@ -65,6 +66,9 @@ func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
 	s.route("GET /api/orders/mine", "/api/orders", s.authed(s.getMyOrders))
 	s.route("GET /api/payments/config", "/api/payments", s.getPaymentConfig)
 	s.route("POST /api/payments/midtrans/notification", "/api/payments", s.postMidtransNotification) // dipanggil Midtrans; dijaga tanda tangan
+	s.route("GET /api/shipping/config", "/api/shipping", s.getShippingConfig)
+	s.route("GET /api/shipping/areas", "/api/shipping", s.authed(s.getShippingAreas))
+	s.route("POST /api/shipping/biteship/webhook", "/api/shipping", s.postBiteshipWebhook) // dipanggil Biteship; dijaga rahasia + verifikasi ulang ke API
 	s.route("POST /api/orders/{id}/payment", "/api/orders", s.authed(s.postPaymentSession))
 	s.route("POST /api/orders/{id}/payment/sync", "/api/orders", s.authed(s.postPaymentSync))
 	s.route("GET /api/orders/{id}", "/api/orders", s.authed(s.getOrder))     // pemilik / admin

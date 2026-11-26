@@ -70,6 +70,7 @@ erDiagram
         text google_sub UK "nullable"
         bool email_verified
         timestamptz last_login_at "nullable"
+        text area_id "Biteship area id alamat tersimpan (018)"
         timestamptz created_at
     }
     auth_tokens {
@@ -108,6 +109,7 @@ erDiagram
         numeric print_max_h_cm
         text producer_id FK "vendor yang mencetak"
         int production_cost "tarif vendor per pcs, <= base_price"
+        int weight_g "berat per pcs (gram) untuk ongkir, 1–30000 (018)"
     }
     colors {
         text id PK
@@ -157,6 +159,14 @@ erDiagram
         text voucher_code FK "nullable"
         text cust_postal
         text notes "catatan untuk kurir"
+        text dest_area_id "Biteship area id tujuan; kosong = tarif flat (018)"
+        int weight_g "berat paket saat checkout, gram (018)"
+        text courier_company "kode kurir pilihan pembeli, mis. jne; kosong = flat (018)"
+        text courier_type "layanan, mis. reg (018)"
+        text biteship_order_id UK "nullable — terisi saat admin membuat pengiriman"
+        text biteship_tracking_id "nullable"
+        text courier_status "nullable — status pelacakan Biteship terakhir"
+        int shipment_cost "nullable — ongkos kurir sebenarnya (saldo Biteship)"
         text shipped_courier "nullable — kurir yang mengirim"
         text tracking_number "nullable — resi, unik per kurir"
         timestamptz shipped_at "nullable"
@@ -408,6 +418,14 @@ erDiagram
 - **Resi wajib sebelum dikirim.** CHECK `orders_shipped_has_tracking`: status `dikirim`/`selesai`
   harus punya `shipped_courier`, `tracking_number`, `shipped_at`. Indeks unik
   `(lower(shipped_courier), tracking_number)` mencegah satu resi dipakai dua pesanan.
+- **Pengiriman Biteship** (migration 018): `product_types.weight_g` (kaos 200, hoodie 600, mug 400,
+  totebag 150) × qty = berat tarif; `orders` menyimpan area tujuan, berat, kurir pilihan
+  (`courier_company` + `courier_type`, tervalidasi server terhadap tarif langsung), serta id
+  order/pelacakan Biteship. `orders.courier` tetap label tampilan; `shipped_courier` + `tracking_number`
+  tetap diisi lewat jalur yang sama dengan resi manual sehingga CHECK `orders_shipped_has_tracking`
+  berlaku. `shipment_cost` hanya terisi lewat `ship-biteship`: di transaksi yang sama tagihan vendor
+  `producer_charges.kind='ongkir'` yang belum dibayar dihapus, dan `GET /api/finance` menghitung
+  `shipment_cost` sebagai biaya kurir platform (`courierCosts`). `ship` manual tidak mengisinya.
 - **Voucher** dihitung pemakaiannya dari `orders.voucher_code` (kuota total & per akun), dikunci
   `FOR UPDATE` saat pesanan dibuat agar kuota tidak terlampaui. Diskon ditanggung platform —
   royalti tetap dari harga item.

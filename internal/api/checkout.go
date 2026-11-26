@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"slices"
@@ -33,7 +34,7 @@ type Courier struct {
 	Cost  int    `json:"cost"`
 }
 
-// tarif flat (prototipe) — nanti diganti API ongkir (RajaOngkir/Biteship)
+// tarif flat (dev, tanpa BITESHIP_API_KEY) — dengan Biteship, tarif datang dari shipping.go
 var couriers = []Courier{
 	{"SiCepat REG", "SiCepat REG", "3–4 hari", 18_000},
 	{"JNE REG", "JNE REG", "3–5 hari", 20_000},
@@ -78,6 +79,8 @@ type Quote struct {
 	Voucher      *VoucherInfo `json:"voucher,omitempty"`
 	VoucherError string       `json:"voucherError,omitempty"`
 	Couriers     []Courier    `json:"couriers"`
+	Weight       int          `json:"weight"`   // gram: Σ qty × product_types.weight_g
+	Provider     string       `json:"provider"` // biteship | flat
 }
 
 // checkoutError = kesalahan input pembeli → 400 dengan pesan yang bisa ditampilkan.
@@ -93,8 +96,9 @@ type querier interface {
 
 // quoteOrder menghitung ulang seluruh keranjang. lockVoucher=true dipakai saat
 // membuat pesanan (di dalam transaksi) supaya kuota voucher tidak terlampaui
-// oleh dua checkout bersamaan.
-func quoteOrder(ctx context.Context, q querier, user *User, lines []CartLine, courierID, voucherCode string, lockVoucher bool) (*Quote, error) {
+// oleh dua checkout bersamaan; pada mode itu pilihan kurir juga wajib valid.
+// ship = tujuan pengiriman; dengan Biteship aktif ongkir dihitung dari tarif langsung.
+func quoteOrder(ctx context.Context, q querier, user *User, lines []CartLine, courierID, voucherCode string, lockVoucher bool, ship shipTarget) (*Quote, error) {
 	if len(lines) == 0 {
 		return nil, checkoutError("Keranjang kosong")
 	}
@@ -122,7 +126,7 @@ func quoteOrder(ctx context.Context, q querier, user *User, lines []CartLine, co
 		merged = append(merged, l)
 	}
 
-	quote := &Quote{Items: []QuoteLine{}, Couriers: couriers}
+	quote := &Quote{Items: []QuoteLine{}, Couriers: couriers, Provider: "flat"}
 	for _, l := range merged {
 		var line QuoteLine
 		var err error
@@ -139,11 +143,26 @@ func quoteOrder(ctx context.Context, q querier, user *User, lines []CartLine, co
 		quote.Items = append(quote.Items, line)
 	}
 
-	c, ok := courierByID(courierID)
-	if !ok {
-		c = couriers[0]
+	weight, err := orderWeight(ctx, q, quote.Items)
+	if err != nil {
+		return nil, err
 	}
-	quote.Courier, quote.Shipping = c, c.Cost
+	quote.Weight = weight
+
+	if ship.live() {
+		quote.Provider = "biteship"
+		c, options, err := resolveLiveCourier(ctx, ship, courierID, weight, quote.Subtotal, lockVoucher)
+		if err != nil {
+			return nil, err
+		}
+		quote.Courier, quote.Shipping, quote.Couriers = c, c.Cost, options
+	} else {
+		c, ok := courierByID(courierID)
+		if !ok {
+			c = couriers[0]
+		}
+		quote.Courier, quote.Shipping = c, c.Cost
+	}
 
 	if code := normalizeVoucher(voucherCode); code != "" {
 		discount, info, err := evalVoucher(ctx, q, user, code, quote.Subtotal, quote.Shipping, lockVoucher)
@@ -306,21 +325,28 @@ func rupiah(n int) string {
 	return "Rp" + b.String()
 }
 
-// POST /api/checkout/quote {items, courier, voucher} → ringkasan harga dari server
+// POST /api/checkout/quote {items, courier, voucher, areaId} → ringkasan harga dari server
 func (s *Server) postQuote(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Items   []CartLine `json:"items"`
 		Courier string     `json:"courier"`
 		Voucher string     `json:"voucher"`
+		AreaID  string     `json:"areaId"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		errJSON(w, http.StatusBadRequest, "Bad request")
 		return
 	}
-	quote, err := quoteOrder(r.Context(), s.pool, userFrom(r), body.Items, body.Courier, body.Voucher, false)
+	quote, err := quoteOrder(r.Context(), s.pool, userFrom(r), body.Items, body.Courier, body.Voucher, false,
+		shipTarget{cfg: &s.shipping, areaID: strings.TrimSpace(body.AreaID)})
 	var ce checkoutError
 	if errors.As(err, &ce) {
 		errJSON(w, http.StatusBadRequest, ce.Error())
+		return
+	}
+	if errors.Is(err, errShippingDown) {
+		log.Printf("quote: %v", err)
+		errJSON(w, http.StatusBadGateway, "Ongkir belum bisa dihitung. Coba lagi sebentar lagi.")
 		return
 	}
 	if err != nil {

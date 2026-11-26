@@ -18,7 +18,8 @@ Saat pertama kali start, API otomatis:
 3. di luar produksi: memberi password ke akun demo (lihat di bawah).
 
 Konfigurasi lewat env var (lihat `.env.example`): `DATABASE_URL`, `PORT` (default 8081),
-`UPLOAD_DIR`, `APP_ENV`, `DEMO_PASSWORD`, `COOKIE_SECURE`, `APP_URL`, `SMTP_*`, `MAIL_FROM`, `GOOGLE_*`.
+`UPLOAD_DIR`, `APP_ENV`, `DEMO_PASSWORD`, `COOKIE_SECURE`, `APP_URL`, `SMTP_*`, `MAIL_FROM`, `GOOGLE_*`,
+`BITESHIP_API_KEY`, `BITESHIP_WEBHOOK_SECRET`, `BITESHIP_COURIERS`, `SHIP_ORIGIN_*`.
 
 ## Autentikasi
 
@@ -81,7 +82,10 @@ peran salah → `403`.
 | `/api/orders/{id}/payment` | POST | pemilik, admin | Buat/lanjutkan sesi Snap → `{token}` |
 | `/api/orders/{id}/payment/sync` | POST | pemilik, admin | Server menanyakan status ke Midtrans & menerapkannya |
 | `/api/payments/midtrans/notification` | POST | Midtrans | Webhook (tanda tangan + konfirmasi Status API) |
-| `/api/orders/{id}` | PATCH | pemilik, admin | `{action:"pay"}` — hanya mode **mock** untuk pembeli; di mode Midtrans hanya admin (lunas manual). Khusus admin: `advance` (dibayar→produksi), `ship` `{courier, trackingNumber}` (produksi→dikirim, **resi wajib**), `update-shipment` (koreksi resi), `delivered` (dikirim→tiba, laporan kurir). Khusus **pembeli**: `confirm` (tiba→selesai) |
+| `/api/orders/{id}` | PATCH | pemilik, admin | `{action:"pay"}` — hanya mode **mock** untuk pembeli; di mode Midtrans hanya admin (lunas manual). Khusus admin: `advance` (dibayar→produksi), `ship` `{courier, trackingNumber}` (produksi→dikirim, **resi wajib**), `ship-biteship` (pesan kurir lewat Biteship, resi otomatis), `sync-shipment` (tarik status pelacakan Biteship), `update-shipment` (koreksi resi), `delivered` (dikirim→tiba, laporan kurir). Khusus **pembeli**: `confirm` (tiba→selesai) |
+| `/api/shipping/config` | GET | publik | `{provider: "biteship" \| "flat"}` — frontend memilih autocomplete area atau tarif flat |
+| `/api/shipping/areas?q=` | GET | login | Autocomplete kota/kecamatan tujuan (Biteship Maps; ≥3 huruf; 404 saat mode flat) |
+| `/api/shipping/biteship/webhook` | POST | Biteship | Webhook pelacakan (rahasia `X-Webhook-Secret` / `?secret=` + verifikasi ulang ke API pelacakan) |
 | `/api/designer/orders` | GET | kreator, admin | Item pesanan yang memuat produk kreator + royalti (tanpa alamat/kontak pembeli) |
 | `/api/vouchers` | GET / POST | admin | Daftar (+ pemakaian) / buat voucher |
 | `/api/vouchers/{code}` | PATCH | admin | `{active}` |
@@ -143,6 +147,38 @@ Pesanan **tidak bisa** berstatus `dikirim`/`selesai` tanpa nama kurir + nomor re
 huruf besar tanpa spasi). Dijaga tiga lapis — form admin, API, dan CHECK constraint
 `orders_shipped_has_tracking` di database. Satu resi tidak boleh dipakai dua pesanan pada kurir yang
 sama (409). Pembeli melihat kurir & resi di halaman pesanannya.
+
+**Penyedia** dipilih dari env (seperti pembayaran):
+
+- `BITESHIP_API_KEY` diisi → **Biteship**. Tujuan dipilih lewat autocomplete area
+  (`GET /api/shipping/areas`, Maps API `GET /v1/maps/areas`); `quoteOrder` meminta tarif langsung
+  (`POST /v1/rates/couriers`, berat = Σ qty × `product_types.weight_g`) dari area asal
+  `SHIP_ORIGIN_AREA_ID` ke area tujuan, dan **memvalidasi kurir pilihan** (`<kode>:<layanan>`, mis.
+  `jne:reg`) terhadap tarif itu — harga/kurir kiriman browser tidak pernah dipercaya. Pesanan menyimpan
+  `dest_area_id`, `weight_g`, `courier_company`, `courier_type`. Berat per jenis produk diubah admin
+  di tab Keuangan (`PATCH /api/product-types/{id} {weightG}`).
+- Admin `ship-biteship` (tombol "Buat pengiriman") memanggil `POST /v1/orders` dengan
+  `reference_id` = nomor pesanan (idempoten), lalu mencatat resi yang dikembalikan lewat `shipOrder`
+  (jalur yang sama dengan resi manual, jadi CHECK constraint tetap berlaku). `ship` manual tetap ada
+  sebagai cadangan. Id order/pelacakan Biteship dan ongkos kurir sebenarnya disimpan di
+  `orders.biteship_order_id`, `biteship_tracking_id`, `shipment_cost`.
+- **Webhook** `POST /api/shipping/biteship/webhook`: webhook Biteship tidak bertanda tangan, jadi
+  didaftarkan dengan header kustom `X-Webhook-Secret: <BITESHIP_WEBHOOK_SECRET>` (atau
+  `…/webhook?secret=<…>`). Isi webhook tidak dipercaya: server mengambil ulang `GET /v1/trackings/{id}`
+  lalu memanggil `markDelivered` bila `delivered` (idempoten — webhook ulang tidak mengubah apa pun).
+  Admin juga bisa menarik status manual (`sync-shipment`).
+- Kunci kosong (dev) → **flat**: tarif konstanta di `checkout.go`, kota diketik bebas, resi manual.
+- Env: `BITESHIP_API_KEY` (`biteship_test.…` = sandbox), `BITESHIP_WEBHOOK_SECRET` (wajib bila kunci
+  diisi), `BITESHIP_COURIERS` (opsional, default `jne,sicepat,anteraja`), `SHIP_ORIGIN_AREA_ID`,
+  `SHIP_ORIGIN_NAME`, `SHIP_ORIGIN_PHONE`, `SHIP_ORIGIN_ADDRESS` (wajib bila kunci diisi),
+  `SHIP_ORIGIN_POSTAL`, `SHIP_ORIGIN_NOTE` (opsional).
+- **Keuangan**: pesanan yang dikirim lewat `ship-biteship` dibayar kurirnya oleh platform (saldo
+  Biteship), jadi dalam transaksi yang sama dengan produksi → dikirim, `shipment_cost` dicatat dan
+  tagihan vendor jenis `ongkir` yang belum dibayarkan dihapus (bila sudah dibayarkan: dibiarkan +
+  peringatan di log, pengiriman tidak gagal). `GET /api/finance` menghitung `courierCosts` (jumlah
+  `shipment_cost`) sebagai biaya platform — tab Keuangan: "Ongkir kurir (Biteship)" — sehingga margin
+  ongkir = ongkir pembeli − `shipment_cost`. `ship` manual (vendor mengirim sendiri) tetap meneruskan
+  ongkir pembeli ke vendor.
 
 ## Alur status pesanan
 
