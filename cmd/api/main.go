@@ -43,16 +43,23 @@ func main() {
 		log.Fatalf("migrasi gagal: %v", err)
 	}
 	production := os.Getenv("APP_ENV") == "production"
-	if err := db.SeedIfEmpty(ctx, pool, production); err != nil {
+	// Staging runs APP_ENV=production but may opt into the demo catalog with
+	// SEED_DEMO=true. Its demo accounts then need an explicit, non-default
+	// DEMO_PASSWORD: the site is public, so the well-known dev password is refused.
+	demoData := !production || os.Getenv("SEED_DEMO") == "true"
+	demoPass := os.Getenv("DEMO_PASSWORD")
+	if demoData && production && (demoPass == "" || demoPass == "karyakita123") {
+		log.Fatalf("SEED_DEMO=true dengan APP_ENV=production butuh DEMO_PASSWORD sendiri (bukan password default)")
+	}
+	if err := db.SeedIfEmpty(ctx, pool, !demoData); err != nil {
 		log.Fatalf("seed gagal: %v", err)
 	}
 	// rebuild the search index: cheap, and it picks up anything changed outside the API
 	if err := db.ReindexSearch(ctx, pool, nil); err != nil {
 		log.Fatalf("indeks pencarian: %v", err)
 	}
-	if !production {
+	if demoData {
 		// akun demo (admin / raka / demo) bisa langsung dipakai login di dev
-		demoPass := os.Getenv("DEMO_PASSWORD")
 		if demoPass == "" {
 			demoPass = "karyakita123"
 		}

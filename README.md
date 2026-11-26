@@ -18,7 +18,7 @@ Saat pertama kali start, API otomatis:
 3. di luar produksi: memberi password ke akun demo (lihat di bawah).
 
 Konfigurasi lewat env var (lihat `.env.example`): `DATABASE_URL`, `PORT` (default 8081),
-`UPLOAD_DIR`, `APP_ENV`, `DEMO_PASSWORD`, `COOKIE_SECURE`, `APP_URL`, `SMTP_*`, `MAIL_FROM`, `GOOGLE_*`.
+`UPLOAD_DIR`, `APP_ENV`, `DEMO_PASSWORD`, `SEED_DEMO`, `COOKIE_SECURE`, `APP_URL`, `SMTP_*`, `MAIL_FROM`, `GOOGLE_*`.
 
 ## Autentikasi
 
@@ -51,6 +51,10 @@ Akun demo (password `karyakita123`, atau `DEMO_PASSWORD`; tidak di-set bila `APP
 Dengan `APP_ENV=production`, seed pertama hanya mengisi data referensi (tipe produk, warna, ukuran);
 tidak ada akun demo, kreator, desain, listing, pesanan, ulasan, maupun analitik. Kategori, atribut,
 sinonim, dan produsen `vendor-utama` berasal dari migrasi. Akun admin pertama dibuat manual lewat SQL.
+
+Staging memakai `APP_ENV=production` plus `SEED_DEMO=true`: seed pertama mengisi data demo lengkap
+seperti di dev, dan akun demo memakai `DEMO_PASSWORD` yang wajib diisi (bukan `karyakita123`; API
+menolak start tanpanya).
 
 ## Endpoint
 
