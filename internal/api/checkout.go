@@ -223,6 +223,9 @@ func quoteCustomLine(ctx context.Context, q querier, l CartLine) (QuoteLine, err
 	if !(isHostedFile(uri) || strings.HasPrefix(uri, "data:image/")) || len(uri) > 1_500_000 {
 		return QuoteLine{}, checkoutError("Gambar desain custom tidak valid — unggah ulang dari Studio")
 	}
+	if err := checkDesignResolution(ctx, q, uri, width); err != nil {
+		return QuoteLine{}, err
+	}
 	title := strings.TrimSpace(l.Title)
 	if title == "" {
 		title = "Custom " + label

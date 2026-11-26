@@ -106,9 +106,11 @@ func TestPrintSpecFlowsFromStudioToOrderItem(t *testing.T) {
 
 func TestCustomDesignSnapshotsItsOwnPrintSpec(t *testing.T) {
 	f := setupCheckout(t)
+	useHostedFiles(t)
+	design := insertFile(t, f, "custom", 4000) // sharp enough for every width the test uses
 	custom := func(extra map[string]any) map[string]any {
 		l := map[string]any{"productId": "custom-" + f.tag, "title": "Custom", "type": "kaos", "color": "putih", "size": "M", "qty": 1,
-			"price": 1, "designUri": "/uploads/" + f.tag + ".png"}
+			"price": 1, "designUri": design}
 		for k, v := range extra {
 			l[k] = v
 		}

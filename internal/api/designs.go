@@ -173,6 +173,16 @@ func (s *Server) postDesign(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// refuse prints that would come out blurry; pixel sizes come from the files table
+	if err := checkDesignResolution(r.Context(), s.pool, body.URI, width); err != nil {
+		var ce checkoutError
+		if errors.As(err, &ce) {
+			errJSON(w, http.StatusBadRequest, ce.Error())
+		} else {
+			errJSON(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
 
 	ctx := r.Context()
 	attrs, err := s.cleanAttributes(ctx, body.Attributes)

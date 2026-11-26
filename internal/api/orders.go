@@ -33,6 +33,9 @@ type CartLine struct {
 	// read for custom designs (a catalog line takes it from its listing).
 	WidthCm   float64 `json:"widthCm"`
 	OffsetYCm float64 `json:"offsetYCm"`
+	// DPI is output only: effective print resolution of a recorded raster upload
+	// (0 = vector or unknown). Shown to production on the admin order page.
+	DPI int `json:"dpi,omitempty"`
 }
 
 type Customer struct {
@@ -885,6 +888,9 @@ func (s *Server) loadOrdersPage(ctx context.Context, where string, args []any, l
 		orders[i].Items = append(orders[i].Items, it)
 	}
 	if err := itemRows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.fillItemDPI(ctx, orders); err != nil {
 		return nil, err
 	}
 

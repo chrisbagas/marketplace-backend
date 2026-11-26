@@ -92,12 +92,16 @@ type UserDesign struct {
 	URI       string  `json:"uri"`
 	WidthCm   float64 `json:"widthCm"`
 	OffsetYCm float64 `json:"offsetYCm"`
+	// Pixel width of the hosted raster upload (from files); null for vector or unknown files.
+	WidthPx *int `json:"widthPx"`
 }
 
 func (s *Server) getUserDesigns(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT id, (extract(epoch FROM created_at)*1000)::bigint, title, product_type_id, color_id, uri, width_cm, offset_y_cm
-		FROM user_designs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`, userFrom(r).ID)
+		SELECT id, (extract(epoch FROM created_at)*1000)::bigint, title, product_type_id, color_id, uri, width_cm, offset_y_cm,
+		       (SELECT f.width_px FROM files f
+		         WHERE $2::text <> '' AND left(ud.uri, length($2::text)) = $2::text AND f.key = substr(ud.uri, length($2::text) + 1))
+		FROM user_designs ud WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`, userFrom(r).ID, hostedFilePrefix)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())
 		return
@@ -106,7 +110,7 @@ func (s *Server) getUserDesigns(w http.ResponseWriter, r *http.Request) {
 	designs := []UserDesign{}
 	for rows.Next() {
 		var d UserDesign
-		if err := rows.Scan(&d.ID, &d.T, &d.Title, &d.Type, &d.Color, &d.URI, &d.WidthCm, &d.OffsetYCm); err != nil {
+		if err := rows.Scan(&d.ID, &d.T, &d.Title, &d.Type, &d.Color, &d.URI, &d.WidthCm, &d.OffsetYCm, &d.WidthPx); err != nil {
 			errJSON(w, http.StatusInternalServerError, err.Error())
 			return
 		}
