@@ -3,14 +3,15 @@
 Database: **PostgreSQL 16** · skema penuh di [`internal/db/schema.sql`](internal/db/schema.sql)
 (dimigrasikan otomatis saat API pertama kali start, dicatat di `schema_migrations`).
 
-27 tabel dalam 5 kelompok:
+31 tabel dalam 6 kelompok:
 
 | Kelompok | Tabel |
 |---|---|
 | **Identitas** | `users` (profil + preferensi + kredensial), `sessions` (sesi login), `auth_tokens` (link verifikasi & reset password), `designers`, `user_designs` (desain custom pribadi — tanpa royalti) |
 | **Katalog** | `product_types`, `colors`, `product_type_colors`, `product_type_sizes`, `designs`, `listings`, `categories`, `design_categories` |
-| **Transaksi** | `orders`, `order_items`, `payments`, `order_events`, `reviews` (ulasan terverifikasi + moderasi), `vouchers` |
+| **Transaksi** | `orders`, `order_items`, `payments`, `order_events`, `reviews` (ulasan terverifikasi + moderasi), `vouchers`, `payment_notifications` (jejak webhook/sync gateway) |
 | **Kreator** | `design_submissions` (terbit jadi listing saat disetujui), `royalties`, `payouts` |
+| **Keuangan** | `producers` (vendor cetak + kirim), `producer_charges` (hak vendor per pesanan), `producer_payouts` (transfer ke vendor) |
 | **Analitik** | `track_events`, `web_vitals`, `api_metrics`, `search_terms`, `day_stats` |
 
 ## Diagram ERD
@@ -50,6 +51,10 @@ erDiagram
     orders ||--|| payments : "dibayar via"
     orders ||--o{ order_events : "timeline"
     order_items ||--o| royalties : "menghasilkan"
+    producers ||--o{ product_types : "mencetak"
+    producers ||--o{ producer_charges : "berhak atas"
+    orders ||--o{ producer_charges : "biaya produksi + ongkir"
+    producer_payouts ||--o{ producer_charges : "melunasi"
 
     users {
         text id PK
@@ -87,14 +92,18 @@ erDiagram
         int hue
         int followers
         numeric rating
-        numeric royalty_share "default 0.12"
+        text bank_name "nullable, rekening tujuan penarikan"
+        text bank_account "nullable"
+        text bank_holder "nullable"
     }
     product_types {
         text id PK "kaos | hoodie | mug | totebag"
         text label
-        int base_price "Rupiah"
+        int base_price "Rupiah; di atasnya = bagian kreator"
         numeric print_max_w_cm
         numeric print_max_h_cm
+        text producer_id FK "vendor yang mencetak"
+        int production_cost "tarif vendor per pcs, <= base_price"
     }
     colors {
         text id PK
@@ -149,8 +158,9 @@ erDiagram
         timestamptz shipped_at "nullable"
         timestamptz delivered_at "nullable — laporan kurir paket tiba"
         timestamptz completed_at "nullable — dikonfirmasi pembeli / otomatis"
+        timestamptz cancelled_at "nullable — dibatalkan karena tidak dibayar"
         int total
-        order_status status "menunggu-pembayaran → dibayar → produksi → dikirim → tiba → selesai"
+        order_status status "menunggu-pembayaran → dibayar → produksi → dikirim → tiba → selesai (atau dibatalkan)"
         timestamptz created_at
     }
     order_items {
@@ -164,6 +174,9 @@ erDiagram
         int qty
         int unit_price
         text design_uri "snapshot"
+        int base_price "snapshot saat checkout"
+        int production_cost "snapshot saat checkout"
+        text producer_id FK "snapshot saat checkout"
     }
     payments {
         bigint id PK
@@ -173,6 +186,7 @@ erDiagram
         text ref "ref gateway"
         int amount
         timestamptz paid_at "nullable"
+        int gateway_fee "estimasi biaya Midtrans"
     }
     vouchers {
         text code PK "huruf besar"
@@ -208,16 +222,48 @@ erDiagram
         bigint id PK
         text designer_id FK
         bigint order_item_id FK,UK
-        int amount "royalty_share x nilai item"
+        int amount "(harga jual - harga dasar) x qty"
         timestamptz created_at
     }
     payouts {
         bigint id PK
         text designer_id FK
         int amount
-        payout_status status "diminta | diproses | dibayar"
+        payout_status status "diminta | diproses | dibayar | ditolak"
         timestamptz requested_at
         timestamptz paid_at "nullable"
+        text bank_name "salinan rekening saat diajukan"
+        text bank_account
+        text bank_holder
+        text reference "no. referensi transfer, nullable"
+        text note "alasan tolak / catatan admin, nullable"
+        timestamptz processed_at "nullable"
+    }
+    producers {
+        text id PK
+        text name
+        text contact "nullable"
+        text bank_name "nullable"
+        text bank_account "nullable"
+        text bank_holder "nullable"
+        boolean active
+    }
+    producer_charges {
+        bigint id PK
+        text producer_id FK
+        text order_id FK
+        bigint order_item_id FK "NULL = ongkir"
+        text kind "produksi | ongkir"
+        int amount
+        bigint payout_id FK "NULL = belum dibayar"
+    }
+    producer_payouts {
+        bigint id PK
+        text producer_id FK
+        int amount
+        text reference "no. referensi transfer"
+        text note "nullable"
+        timestamptz created_at
     }
     categories {
         text id PK "alam | anime | batik | ..."
@@ -302,12 +348,32 @@ erDiagram
 - **`payments` terpisah dari `orders`.** Siap untuk retry pembayaran/metode ganda, dan meniru
   webhook gateway: `PATCH {action:"pay"}` = notifikasi Midtrans/Xendit. Idempoten — bayar dua
   kali tidak menggandakan royalti (`ON CONFLICT (order_item_id) DO NOTHING`).
-- **Royalti dibukukan saat pembayaran**, dihitung dari `designers.royalty_share` (default 12%),
-  satu baris per `order_item` — auditable, tinggal `SUM` untuk saldo kreator.
+- **Pembagian uang dibukukan saat pembayaran** (`db.BookPaidOrder`, dipakai juga oleh seeder).
+  Semua uang pembeli masuk ke rekening platform, lalu per item:
+  kreator = (harga jual − harga dasar) × qty → `royalties`;
+  vendor = biaya produksi × qty + ongkir pesanan (vendor yang mengirim) → `producer_charges`;
+  Midtrans = estimasi → `payments.gateway_fee`; platform = sisanya
+  (harga dasar − biaya produksi, biaya custom, dikurangi diskon voucher & biaya gateway).
+  Harga dasar & biaya produksi disalin ke `order_items` saat checkout, jadi mengubah tarif vendor
+  tidak mengubah pesanan lama. Idempoten lewat unique index (`royalties.order_item_id`,
+  `producer_charges` per item / per pesanan untuk ongkir).
+- **Vendor dibayar setelah paket dikirim.** Tagihan "siap bayar" = `producer_charges` tanpa
+  `payout_id` yang pesanannya `dikirim/tiba/selesai`; mencatat pembayaran menautkan semuanya ke satu
+  `producer_payouts` (nominal dihitung server).
+- **Royalti baru bisa ditarik setelah pesanan `selesai`** (pembeli konfirmasi / selesai otomatis).
+  Saldo tidak disimpan di kolom: `tersedia = SUM(royalti pesanan selesai) − SUM(payouts diminta/
+  diproses/dibayar)`; payout `ditolak` mengembalikan dana. Satu pengajuan terbuka per kreator
+  (unique index parsial), dan pengajuan mengunci baris `designers` supaya dua permintaan bersamaan
+  tidak bisa menarik melebihi saldo. Minimal Rp50.000; transfer masih manual oleh admin.
 - **Checkout wajib login.** Pesanan baru selalu punya `user_id` dan hanya bisa dilihat pemilik/admin;
   `user_id` tetap nullable untuk pesanan guest lama.
 - **Harga dihitung server.** `order_items.unit_price`, ongkir, dan `discount` berasal dari database
   saat checkout, bukan dari browser. `total = subtotal + shipping_cost − discount`.
+- **Pembayaran diputuskan gateway.** Lunas hanya setelah Status API Midtrans menyatakan settlement
+  (webhook hanya pemicu). Kolom `payments.gateway_order_id` (`<no. pesanan>-<percobaan>`, unik),
+  `snap_token`, `payment_type`. `payment_notifications` mencatat setiap notifikasi/cek (sumber, hasil,
+  tanda tangan valid atau tidak). Pesanan tak dibayar 24 jam → `dibatalkan`; kuota voucher tidak
+  menghitung pesanan dibatalkan.
 - **Selesai hanya oleh pembeli.** `tiba` (wajib `delivered_at`, CHECK `orders_delivered_has_time`)
   → `selesai` lewat konfirmasi pembeli atau otomatis 48 jam setelah tiba (`completed_at`).
 - **Resi wajib sebelum dikirim.** CHECK `orders_shipped_has_tracking`: status `dikirim`/`selesai`
