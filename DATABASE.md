@@ -3,7 +3,7 @@
 Database: **PostgreSQL 16** · skema penuh di [`internal/db/schema.sql`](internal/db/schema.sql)
 (dimigrasikan otomatis saat API pertama kali start, dicatat di `schema_migrations`).
 
-36 tabel dalam 7 kelompok:
+37 tabel dalam 8 kelompok:
 
 | Kelompok | Tabel |
 |---|---|
@@ -13,6 +13,7 @@ Database: **PostgreSQL 16** · skema penuh di [`internal/db/schema.sql`](interna
 | **Transaksi** | `orders`, `order_items`, `payments`, `order_events`, `reviews` (ulasan terverifikasi + moderasi), `vouchers`, `payment_notifications` (jejak webhook/sync gateway) |
 | **Kreator** | `design_submissions` (terbit jadi listing saat disetujui), `royalties`, `payouts` |
 | **Keuangan** | `producers` (vendor cetak + kirim), `producer_charges` (hak vendor per pesanan), `producer_payouts` (transfer ke vendor) |
+| **Berkas** | `files` (objek di object storage: jenis, ukuran, dimensi piksel, pemilik) |
 | **Analitik** | `track_events`, `web_vitals`, `api_metrics`, `search_terms`, `day_stats` |
 
 ## Diagram ERD
@@ -24,6 +25,7 @@ erDiagram
     users ||--o{ user_designs : "desain custom pribadi"
     users ||--o{ sessions : "sesi login"
     users ||--o{ auth_tokens : "link email"
+    users ||--o{ files : "mengunggah"
     product_types ||--o{ user_designs : ""
     colors ||--o{ user_designs : ""
 
@@ -314,13 +316,23 @@ erDiagram
         review_status status "review | disetujui | ditolak"
         text note "catatan moderasi"
     }
+    files {
+        text key PK "purpose/random.ext; legacy/nama untuk hasil migrasi"
+        text mime "dari isi file, bukan klaim klien"
+        bigint bytes
+        int width_px "NULL untuk SVG"
+        int height_px "NULL untuk SVG"
+        text owner_id FK "users, NULL untuk file legacy"
+        text purpose "designs | custom | avatars | complaints | legacy"
+        timestamptz created_at
+    }
     user_designs {
         bigint id PK
         text user_id FK
         text title
         text product_type_id FK
         text color_id FK
-        text uri "/uploads/... atau data-URI"
+        text uri "URL object storage atau data-URI"
         numeric width_cm
         numeric offset_y_cm
     }
@@ -435,8 +447,11 @@ erDiagram
   "Pencarian" tab.
 - **Desain custom pribadi** (`user_designs`): dibeli sebagai `order_items` dengan
   `listing_id NULL` → otomatis tak pernah menghasilkan royalti dan tak tampil di katalog.
-- **Gambar** disimpan sebagai file (`uploads/` lokal; S3/R2 di produksi) — database hanya
-  menyimpan URL.
+- **Gambar** disimpan di object storage S3-compatible (Cloudflare R2 di produksi, server S3 lokal
+  di dev) — browser mengunggah langsung lewat presigned URL, database hanya menyimpan URL publik
+  (`FILES_PUBLIC_URL/<key>`) di kolom `uri` / `design_uri` / `avatar_uri`. Tabel `files` mencatat
+  tiap objek (jenis sebenarnya dari isi file, ukuran byte, dimensi piksel, pemilik, tujuan);
+  file hasil migrasi dari folder `uploads/` lama berkunci `legacy/<nama>` tanpa pemilik.
 
 ## Cara pakai
 

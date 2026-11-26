@@ -144,6 +144,8 @@ func TestQuoteUsesServerPricesAndKeepsSizesSeparate(t *testing.T) {
 
 func TestQuoteRejectsInvalidLines(t *testing.T) {
 	f := setupCheckout(t)
+	hostedFilePrefix = "https://files.test/"
+	t.Cleanup(func() { hostedFilePrefix = "" })
 	bad := map[string]map[string]any{
 		"ukuran":   f.line("XXXL", 1),
 		"warna":    {"productId": f.listing, "type": "kaos", "color": "ungu", "size": "M", "qty": 1},
@@ -159,7 +161,7 @@ func TestQuoteRejectsInvalidLines(t *testing.T) {
 	}
 	// custom yang sah: harga = harga dasar kaos + biaya custom
 	_, out := call(f.s, "POST", "/api/checkout/quote", map[string]any{"items": []any{
-		map[string]any{"productId": "custom-9", "title": "Custom Kaos — Logo", "type": "kaos", "color": "putih", "size": "M", "qty": 1, "designUri": "/uploads/a.png", "price": 1},
+		map[string]any{"productId": "custom-9", "title": "Custom Kaos — Logo", "type": "kaos", "color": "putih", "size": "M", "qty": 1, "designUri": hostedFilePrefix + "designs/" + strings.Repeat("a", 32) + ".png", "price": 1},
 	}}, f.buyer)
 	if it := quoteOf(t, out)["items"].([]any)[0].(map[string]any); num(it["price"]) != 95_000+customFee {
 		t.Errorf("harga custom %v, want %d", it["price"], 95_000+customFee)

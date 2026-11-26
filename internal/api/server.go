@@ -10,25 +10,26 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"karyakita/api/internal/mail"
+	"karyakita/api/internal/s3"
 )
 
 type Server struct {
 	pool      *pgxpool.Pool
 	mux       *http.ServeMux
-	uploadDir string
+	files     *s3.Client // nil = uploads disabled
 	auth      AuthConfig
 	limiter   *rateLimiter
 	payments  PaymentsConfig
 }
 
-func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
+func NewServer(pool *pgxpool.Pool, auth AuthConfig) *Server {
 	if auth.Mailer == nil {
 		auth.Mailer = mail.Log{ShowBody: true}
 	}
 	if auth.AppURL == "" {
 		auth.AppURL = "http://localhost:3000"
 	}
-	s := &Server{pool: pool, mux: http.NewServeMux(), uploadDir: uploadDir, auth: auth, limiter: newRateLimiter()}
+	s := &Server{pool: pool, mux: http.NewServeMux(), auth: auth, limiter: newRateLimiter()}
 
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := pool.Ping(r.Context()); err != nil {
@@ -100,13 +101,13 @@ func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
 	s.route("PATCH /api/attribute-values/{id}", "/api/attributes", s.authed(s.patchAttributeValue, admin))
 	s.route("DELETE /api/attribute-values/{id}", "/api/attributes", s.authed(s.deleteAttributeValue, admin))
 	s.route("PATCH /api/listings/{id}", "/api/listings", s.authed(s.patchListing, designer, admin))
-	s.route("POST /api/uploads", "/api/uploads", s.authed(s.postUpload))
+	s.route("POST /api/uploads/presign", "/api/uploads", s.authed(s.postPresign))
+	s.route("POST /api/uploads/complete", "/api/uploads", s.authed(s.postUploadComplete))
 	s.route("GET /api/profile", "/api/profile", s.authed(s.getProfile))
 	s.route("PATCH /api/profile", "/api/profile", s.authed(s.patchProfile))
 	s.route("GET /api/user-designs", "/api/user-designs", s.authed(s.getUserDesigns))
 	s.route("POST /api/user-designs", "/api/user-designs", s.authed(s.postUserDesign))
 	s.route("DELETE /api/user-designs/{id}", "/api/user-designs", s.authed(s.deleteUserDesign))
-	s.mux.Handle("GET /uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadDir))))
 	s.route("GET /api/reviews", "/api/reviews", s.getReviews)
 	s.route("POST /api/reviews", "/api/reviews", s.authed(s.postReview)) // bukti: pesanan selesai milik akun ini
 	s.route("PATCH /api/reviews", "/api/reviews", s.authed(s.patchReview, admin))

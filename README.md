@@ -6,7 +6,7 @@ Backend marketplace print-on-demand KaryaKita. Frontend Next.js ada di repo terp
 ## Menjalankan
 
 ```bash
-docker compose up -d    # 1. Postgres 16 + Mailpit (butuh Docker Desktop jalan)
+docker compose up -d    # 1. Postgres 16 + Mailpit + penyimpanan file S3 lokal (butuh Docker Desktop jalan)
 go run ./cmd/api        # 2. API di http://localhost:8081
 ```
 
@@ -18,7 +18,28 @@ Saat pertama kali start, API otomatis:
 3. di luar produksi: memberi password ke akun demo (lihat di bawah).
 
 Konfigurasi lewat env var (lihat `.env.example`): `DATABASE_URL`, `PORT` (default 8081),
-`UPLOAD_DIR`, `APP_ENV`, `DEMO_PASSWORD`, `COOKIE_SECURE`, `APP_URL`, `SMTP_*`, `MAIL_FROM`, `GOOGLE_*`.
+`APP_ENV`, `DEMO_PASSWORD`, `COOKIE_SECURE`, `APP_URL`, `SMTP_*`, `MAIL_FROM`, `GOOGLE_*`,
+`S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `FILES_PUBLIC_URL`.
+
+## Penyimpanan file (S3 / Cloudflare R2)
+
+Gambar tidak lewat API: browser meminta URL bertanda tangan (`POST /api/uploads/presign`),
+meng-`PUT` file langsung ke bucket, lalu memanggil `POST /api/uploads/complete`. Server memeriksa
+objeknya (HEAD + baca byte awal: jenis ditentukan dari isi, bukan dari klaim klien; ukuran piksel
+dibaca dengan `image.DecodeConfig`) dan menyimpan baris `files`. Objek yang gagal diperiksa dihapus.
+
+- **Dev:** `docker compose up -d` menjalankan server S3 lokal (`s3`, port 9000/9001) + `s3-init`
+  (membuat bucket `karyakita-files`, baca-publik, dan CORS). Tanpa env `S3_*`, API otomatis memakai
+  server itu; file terbaca di `http://localhost:9000/karyakita-files/<key>`.
+- **Produksi (R2):** buat bucket, aktifkan domain publik (mis. `https://files.<domain>`), buat API
+  token S3 (Object Read & Write), lalu isi `S3_ENDPOINT=https://<account>.r2.cloudflarestorage.com`,
+  `S3_REGION=auto`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `FILES_PUBLIC_URL`.
+  Pasang CORS pada bucket: `PUT` dari origin situs (header `Content-Type`). Tanpa `S3_*` di
+  produksi, unggah dinonaktifkan (503).
+- **Migrasi file lama** (sekali jalan): `go run ./cmd/migrate-uploads -dry-run -dir uploads`, lalu
+  tanpa `-dry-run`. Menyalin `uploads/*` ke bucket (`legacy/<nama>`), menulis ulang `/uploads/<nama>`
+  di `designs.uri`, `design_submissions.uri`, `user_designs.uri`, `order_items.design_uri`,
+  `designers.avatar_uri`. Aman dijalankan ulang; data-URI tidak disentuh.
 
 ## Autentikasi
 
@@ -92,7 +113,8 @@ peran salah → `403`.
 | `/api/reviews` | POST | login | Ulasan — hanya untuk pesanan selesai milik akun ini |
 | `/api/reviews` | PATCH | admin | Moderasi ulasan |
 | `/api/profile`, `/api/user-designs` | * | login | Profil & desain custom milik akun |
-| `/api/uploads` | POST | login | Unggah gambar |
+| `/api/uploads/presign` | POST | login | `{mime, size, purpose}` → URL PUT bertanda tangan + key (maks 50 MB; PNG/JPEG/WebP; SVG hanya admin) |
+| `/api/uploads/complete` | POST | login | `{key}` → server memeriksa isi file asli + ukuran piksel, simpan baris `files`, balas `{url, widthPx, heightPx}`; file yang gagal diperiksa dihapus |
 | `/api/track` | POST / GET | publik / admin | Rekam / baca event perilaku |
 | `/api/vitals` | POST | publik | Rekam Web Vitals (LCP/INP/CLS/TTFB) |
 | `/api/stats` | GET | kreator, admin | Agregasi dashboard (funnel, p75 vitals, p50/p95 API) |
@@ -129,7 +151,7 @@ internal/mail/         pengirim SMTP (Mailpit di dev, penyedia di produksi) + te
   dibuat, jadi angka yang tampil = angka yang ditagih.
 - Ukuran berbeda dari produk yang sama = baris terpisah; baris kembar (produk+warna+ukuran) digabung.
   Maks 99 per baris, 30 baris per pesanan. Ukuran/warna divalidasi terhadap katalog; listing
-  nonaktif ditolak. Desain custom: harga dasar produk + Rp25.000, gambar harus `/uploads/…`.
+  nonaktif ditolak. Desain custom: harga dasar produk + Rp25.000, gambar harus berasal dari bucket kita (`FILES_PUBLIC_URL/…`) atau data-URI.
 - Voucher: `percent` (dengan batas maks), `fixed`, `shipping` (subsidi ongkir); syarat min. belanja,
   masa berlaku, kuota total, batas per akun. Voucher yang tidak berlaku saat pesanan dibuat → 400
   (tidak diam-diam ditagih harga penuh). Diskon ditanggung platform: royalti tetap dari harga item.

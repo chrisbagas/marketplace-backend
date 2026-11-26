@@ -204,7 +204,7 @@ func quoteCustomLine(ctx context.Context, q querier, l CartLine) (QuoteLine, err
 		return QuoteLine{}, checkoutError("Warna atau ukuran produk custom tidak tersedia")
 	}
 	uri := l.DesignURI
-	if !(strings.HasPrefix(uri, "/uploads/") || strings.HasPrefix(uri, "data:image/")) || len(uri) > 1_500_000 {
+	if !(isHostedFile(uri) || strings.HasPrefix(uri, "data:image/")) || len(uri) > 1_500_000 {
 		return QuoteLine{}, checkoutError("Gambar desain custom tidak valid — unggah ulang dari Studio")
 	}
 	title := strings.TrimSpace(l.Title)
