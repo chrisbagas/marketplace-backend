@@ -106,7 +106,7 @@ func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
 	s.route("GET /api/user-designs", "/api/user-designs", s.authed(s.getUserDesigns))
 	s.route("POST /api/user-designs", "/api/user-designs", s.authed(s.postUserDesign))
 	s.route("DELETE /api/user-designs/{id}", "/api/user-designs", s.authed(s.deleteUserDesign))
-	s.mux.Handle("GET /uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadDir))))
+	s.mux.Handle("GET /uploads/", uploadsHandler(uploadDir))
 	s.route("GET /api/reviews", "/api/reviews", s.getReviews)
 	s.route("POST /api/reviews", "/api/reviews", s.authed(s.postReview)) // bukti: pesanan selesai milik akun ini
 	s.route("PATCH /api/reviews", "/api/reviews", s.authed(s.patchReview, admin))

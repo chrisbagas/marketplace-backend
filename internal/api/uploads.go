@@ -59,3 +59,18 @@ func (s *Server) postUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"url": "/uploads/" + name})
 }
+
+// uploadsHandler serves user uploads. SVG is allowed and would otherwise run
+// its scripts on the app origin, so every response is locked down: no script
+// or subresource may load, and the document is sandboxed (opaque origin, no
+// access to cookies). nosniff stops browsers from guessing a more dangerous
+// type. The permanent fix is serving uploads from a separate origin.
+func uploadsHandler(dir string) http.Handler {
+	files := http.StripPrefix("/uploads/", http.FileServer(http.Dir(dir)))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+		h.Set("X-Content-Type-Options", "nosniff")
+		files.ServeHTTP(w, r)
+	})
+}
