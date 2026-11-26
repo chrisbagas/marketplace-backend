@@ -83,6 +83,8 @@ services:
     logging: *logging
     environment:
       APP_ENV: ${APP_ENV:-production}
+      SEED_DEMO: ${SEED_DEMO:-} # staging only: demo data despite APP_ENV=production
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-}
       PORT: "8081"
       DATABASE_URL: postgres://karyakita:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/karyakita?sslmode=disable
       UPLOAD_DIR: /data/uploads

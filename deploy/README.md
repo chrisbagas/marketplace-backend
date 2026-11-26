@@ -145,8 +145,9 @@ working copies. If that is awkward, clone a second pair of repos for staging (`/
 the compose file works from any location.
 
 Differences from production: `STACK=staging` (names the web container `web-staging` on the edge network), `COMPOSE_PROFILES=`
-(empty: no caddy), `MIDTRANS_ENV=sandbox`, different secrets. `APP_ENV` stays `production`; whether demo data is seeded on
-staging is controlled by the production-seed change (roadmap 1.3), wire its variable into `api.environment` when it lands.
+(empty: no caddy), `MIDTRANS_ENV=sandbox`, different secrets. `APP_ENV` stays `production`, plus `SEED_DEMO=true`: the first
+start on the empty staging DB seeds the demo catalog and the demo accounts `admin` / `raka` / `demo` with `DEMO_PASSWORD`
+(required, and the dev default `karyakita123` is refused because staging is public). Never set `SEED_DEMO` in production.
 
 Staging on its **own** server instead: use `.env.staging` with `COMPOSE_PROFILES=edge`, run `docker network create karyakita-edge`
 and skip the `staging.caddy` step; the stack then runs its own caddy.
@@ -359,7 +360,8 @@ password manager; the server is the only other place. `chmod 600` them.
 | `BACKUP_S3_SECRET_ACCESS_KEY` | **secret** | scope the token to the backup bucket only |
 | `BACKUP_PING_URL` | **secret** | anyone with the URL can fake a "success" ping |
 | `SENTRY_DSN` | low | write-only ingest key, but do not publish it |
-| `DOMAIN`, `ACME_EMAIL`, `STACK`, `APP_ENV`, `TRUSTED_PROXY_HOPS`, `MIDTRANS_ENV`, `MIDTRANS_ENABLED_PAYMENTS`, `MAIL_FROM`, `SMTP_HOST/PORT/USERNAME`, `S3_ENDPOINT/REGION/BUCKET`, `FILES_PUBLIC_URL`, `FILES_ORIGIN`, `ADMIN_NOTIFY_EMAIL`, `BACKUP_BUCKET`, `BACKUP_S3_ENDPOINT`, `BACKUP_*` schedule | no | configuration only |
+| `DEMO_PASSWORD` | **secret** | staging only (with `SEED_DEMO=true`): password of the demo `admin` account |
+| `DOMAIN`, `ACME_EMAIL`, `STACK`, `APP_ENV`, `SEED_DEMO`, `TRUSTED_PROXY_HOPS`, `MIDTRANS_ENV`, `MIDTRANS_ENABLED_PAYMENTS`, `MAIL_FROM`, `SMTP_HOST/PORT/USERNAME`, `S3_ENDPOINT/REGION/BUCKET`, `FILES_PUBLIC_URL`, `FILES_ORIGIN`, `ADMIN_NOTIFY_EMAIL`, `BACKUP_BUCKET`, `BACKUP_S3_ENDPOINT`, `BACKUP_*` schedule | no | configuration only |
 
 Rotating a secret: edit the env file, then `kk up -d` (compose recreates containers whose environment changed). Exception:
 `POSTGRES_PASSWORD` also needs `ALTER USER karyakita PASSWORD '...'` inside the database.
