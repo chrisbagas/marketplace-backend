@@ -68,11 +68,20 @@ func googleServer(pool *pgxpool.Pool) *Server {
 	}})
 }
 
-// googleLogin menjalankan start → callback dan mengembalikan respons callback.
+// googleLogin runs start → callback as a visitor who ticked the terms
+// checkbox and returns the callback response.
 func googleLogin(t *testing.T, s *Server, next string) *httptest.ResponseRecorder {
+	return googleLoginConsent(t, s, next, true)
+}
+
+func googleLoginConsent(t *testing.T, s *Server, next string, consent bool) *httptest.ResponseRecorder {
 	t.Helper()
+	startURL := "/api/auth/google/start?next=" + url.QueryEscape(next)
+	if consent {
+		startURL += "&consent=1"
+	}
 	start := httptest.NewRecorder()
-	s.ServeHTTP(start, httptest.NewRequest("GET", "/api/auth/google/start?next="+url.QueryEscape(next), nil))
+	s.ServeHTTP(start, httptest.NewRequest("GET", startURL, nil))
 	if start.Code != http.StatusFound {
 		t.Fatalf("start: status %d, want 302", start.Code)
 	}
@@ -190,5 +199,38 @@ func TestGoogleCallbackRejectsBadStateAndUnverifiedEmail(t *testing.T) {
 	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM users WHERE google_sub = $1`, sub) })
 	if loc := googleLogin(t, s, "https://evil.example").Header().Get("Location"); loc != "/" {
 		t.Fatalf("open redirect: %q, want /", loc)
+	}
+}
+
+func TestGoogleSignupNeedsConsent(t *testing.T) {
+	pool := testPool(t)
+	sub := "tes-sub-" + randomHex(4)
+	email := "setuju." + randomHex(3) + "@gmail.com"
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM users WHERE google_sub = $1`, sub) })
+	fakeGoogle(t, googleInfo{Sub: sub, Email: email, EmailVerified: true, Name: "Tanpa Setuju"})
+	s := googleServer(pool)
+
+	// new account without consent → refused, nothing created
+	cb := googleLoginConsent(t, s, "/", false)
+	if !strings.Contains(cb.Header().Get("Location"), "google-belum-setuju") || sessionCookieFrom(cb) != nil {
+		t.Fatalf("tanpa persetujuan: %d → %s", cb.Code, cb.Header().Get("Location"))
+	}
+	var n int
+	pool.QueryRow(context.Background(), `SELECT count(*) FROM users WHERE google_sub = $1`, sub).Scan(&n)
+	if n != 0 {
+		t.Fatalf("akun dibuat tanpa persetujuan: %d", n)
+	}
+
+	// with consent → created with the timestamp; later login needs no consent
+	if cb := googleLoginConsent(t, s, "/", true); sessionCookieFrom(cb) == nil {
+		t.Fatalf("dengan persetujuan gagal: %s", cb.Header().Get("Location"))
+	}
+	var stamped bool
+	pool.QueryRow(context.Background(), `SELECT terms_accepted_at IS NOT NULL AND creator_terms_accepted_at IS NULL FROM users WHERE google_sub = $1`, sub).Scan(&stamped)
+	if !stamped {
+		t.Fatal("terms_accepted_at tidak tercatat untuk akun Google baru")
+	}
+	if cb := googleLoginConsent(t, s, "/", false); sessionCookieFrom(cb) == nil {
+		t.Fatalf("login ulang tanpa flag persetujuan harus lolos: %s", cb.Header().Get("Location"))
 	}
 }

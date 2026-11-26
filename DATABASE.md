@@ -69,6 +69,8 @@ erDiagram
         text password_hash "bcrypt; NULL = akun Google saja"
         text google_sub UK "nullable"
         bool email_verified
+        timestamptz terms_accepted_at "nullable; NULL = akun lama sebelum persetujuan dikumpulkan"
+        timestamptz creator_terms_accepted_at "nullable; hanya kreator yang daftar setelah 021"
         timestamptz last_login_at "nullable"
         timestamptz created_at
     }

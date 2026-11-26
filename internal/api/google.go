@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -38,7 +39,11 @@ var (
 
 const oauthStateCookie = "kk_oauth_state"
 
-// GET /api/auth/google/start?next=/profile → redirect ke layar persetujuan Google
+// GET /api/auth/google/start?next=/profile&consent=1 → redirect ke layar persetujuan Google.
+// consent=1 means the visitor ticked the terms checkbox on /signup; it is
+// carried in the state cookie and is required only when the callback has to
+// create a new account (existing accounts already consented at signup, or
+// predate consent collection).
 func (s *Server) googleStart(w http.ResponseWriter, r *http.Request) {
 	g := s.auth.Google
 	if !g.Enabled() {
@@ -47,8 +52,12 @@ func (s *Server) googleStart(w http.ResponseWriter, r *http.Request) {
 	}
 	state := randomToken()
 	next := safeNext(r.URL.Query().Get("next"))
+	consent := "0"
+	if r.URL.Query().Get("consent") == "1" {
+		consent = "1"
+	}
 	http.SetCookie(w, &http.Cookie{
-		Name: oauthStateCookie, Value: state + "|" + url.QueryEscape(next),
+		Name: oauthStateCookie, Value: state + "|" + url.QueryEscape(next) + "|" + consent,
 		Path: "/api/auth/google", MaxAge: 600, HttpOnly: true,
 		Secure: s.auth.CookieSecure, SameSite: http.SameSiteLaxMode,
 	})
@@ -79,7 +88,11 @@ func (s *Server) googleCallback(w http.ResponseWriter, r *http.Request) {
 		fail("google-sesi-habis")
 		return
 	}
-	wantState, rawNext, _ := strings.Cut(c.Value, "|")
+	parts := strings.SplitN(c.Value, "|", 3)
+	wantState, rawNext, consented := parts[0], "", len(parts) == 3 && parts[2] == "1"
+	if len(parts) > 1 {
+		rawNext = parts[1]
+	}
 	gotState := r.URL.Query().Get("state")
 	if gotState == "" || subtle.ConstantTimeCompare([]byte(wantState), []byte(gotState)) != 1 {
 		fail("google-state")
@@ -102,7 +115,11 @@ func (s *Server) googleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, err := s.findOrCreateGoogleUser(r.Context(), info)
+	userID, err := s.findOrCreateGoogleUser(r.Context(), info, consented)
+	if errors.Is(err, errGoogleNeedsConsent) {
+		fail("google-belum-setuju")
+		return
+	}
 	if err != nil {
 		fail("google-gagal")
 		return
@@ -173,8 +190,12 @@ func (s *Server) googleUserinfo(ctx context.Context, code string) (*googleInfo, 
 
 // findOrCreateGoogleUser: cocokkan dengan google_sub dulu, lalu email
 // (Google sudah memverifikasi email-nya, jadi aman ditautkan), atau buat
-// akun pelanggan baru dengan username turunan dari email.
-func (s *Server) findOrCreateGoogleUser(ctx context.Context, info *googleInfo) (string, error) {
+// akun pelanggan baru dengan username turunan dari email. Membuat akun baru
+// hanya bila pengguna sudah menyetujui syarat (consented), kalau tidak
+// errGoogleNeedsConsent.
+var errGoogleNeedsConsent = errors.New("persetujuan syarat diperlukan")
+
+func (s *Server) findOrCreateGoogleUser(ctx context.Context, info *googleInfo, consented bool) (string, error) {
 	var id string
 	err := s.pool.QueryRow(ctx, `SELECT id FROM users WHERE google_sub = $1`, info.Sub).Scan(&id)
 	if err == nil {
@@ -185,6 +206,9 @@ func (s *Server) findOrCreateGoogleUser(ctx context.Context, info *googleInfo) (
 		WHERE lower(email) = $1 AND google_sub IS NULL RETURNING id`, info.Email, info.Sub).Scan(&id)
 	if err == nil {
 		return id, nil
+	}
+	if !consented {
+		return "", errGoogleNeedsConsent
 	}
 
 	name := strings.TrimSpace(info.Name)
@@ -199,7 +223,7 @@ func (s *Server) findOrCreateGoogleUser(ctx context.Context, info *googleInfo) (
 		}
 		id, err = s.createUser(ctx, newUser{
 			Username: username, Email: info.Email, Name: name, Role: "customer",
-			GoogleSub: info.Sub, EmailVerified: true,
+			GoogleSub: info.Sub, EmailVerified: true, TermsAccepted: true,
 		})
 		if err == nil {
 			return id, nil

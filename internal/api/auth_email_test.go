@@ -111,7 +111,7 @@ func TestEmailVerificationFlow(t *testing.T) {
 
 	rec, _ := call(s, "POST", "/api/auth/signup", map[string]any{
 		"username": username, "email": username + "@mail.test", "password": "rahasia123",
-		"name": "Tes Verif", "asCreator": true,
+		"name": "Tes Verif", "asCreator": true, "acceptTerms": true, "acceptCreatorTerms": true,
 	})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("signup: %d %s", rec.Code, rec.Body)
@@ -160,7 +160,7 @@ func TestResendInvalidatesOldVerificationLink(t *testing.T) {
 	username := "tesresend_" + randomHex(3)
 	cleanupUser(t, pool, username)
 	rec, _ := call(s, "POST", "/api/auth/signup", map[string]any{
-		"username": username, "email": username + "@mail.test", "password": "rahasia123",
+		"username": username, "email": username + "@mail.test", "password": "rahasia123", "acceptTerms": true,
 	})
 	session := sessionCookieFrom(rec)
 	oldToken := tokenFrom(t, fm.next(t), "/verifikasi-email")
@@ -186,7 +186,7 @@ func TestPasswordResetFlow(t *testing.T) {
 	email := username + "@mail.test"
 	cleanupUser(t, pool, username)
 
-	rec, _ := call(s, "POST", "/api/auth/signup", map[string]any{"username": username, "email": email, "password": "passwordlama"})
+	rec, _ := call(s, "POST", "/api/auth/signup", map[string]any{"username": username, "email": email, "password": "passwordlama", "acceptTerms": true})
 	oldSession := sessionCookieFrom(rec)
 	fm.next(t) // email verifikasi dari signup
 

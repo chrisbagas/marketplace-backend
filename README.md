@@ -28,6 +28,10 @@ Konfigurasi lewat env var (lihat `.env.example`): `DATABASE_URL`, `PORT` (defaul
   Daftar sebagai kreator (`asCreator: true`) langsung membuat profil toko.
 - **Login Google** aktif bila `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URL`
   diisi. Akun Google ditautkan ke akun lama dengan email yang sama, atau dibuat baru (pelanggan).
+  Akun Google baru hanya dibuat bila pengunjung mencentang persetujuan Syarat & Ketentuan di `/signup`
+  (`?consent=1` pada `/api/auth/google/start`); login ke akun yang sudah ada tidak butuh persetujuan.
+- **Persetujuan syarat**: signup password wajib `acceptTerms: true` (+ `acceptCreatorTerms: true` untuk
+  kreator); waktunya tersimpan di `users.terms_accepted_at` / `creator_terms_accepted_at`.
 - **Verifikasi email**: daftar dengan password → email berisi link `{APP_URL}/verifikasi-email?token=…`
   (berlaku 24 jam). Akun tetap bisa dipakai; **kreator wajib terverifikasi untuk mengajukan
   desain**. Akun Google dan akun demo sudah terverifikasi.

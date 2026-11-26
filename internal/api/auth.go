@@ -224,12 +224,14 @@ func (s *Server) postSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Username  string `json:"username"`
-		Email     string `json:"email"`
-		Password  string `json:"password"`
-		Name      string `json:"name"`
-		AsCreator bool   `json:"asCreator"`
-		City      string `json:"city"`
+		Username           string `json:"username"`
+		Email              string `json:"email"`
+		Password           string `json:"password"`
+		Name               string `json:"name"`
+		AsCreator          bool   `json:"asCreator"`
+		City               string `json:"city"`
+		AcceptTerms        bool   `json:"acceptTerms"`
+		AcceptCreatorTerms bool   `json:"acceptCreatorTerms"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		errJSON(w, http.StatusBadRequest, "Bad request")
@@ -253,6 +255,15 @@ func (s *Server) postSignup(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusBadRequest, "Nama atau kota terlalu panjang")
 		return
 	}
+	// consent is recorded server-side; the UI checkbox alone is not enough
+	if !body.AcceptTerms {
+		errJSON(w, http.StatusBadRequest, "Kamu harus menyetujui Syarat & Ketentuan dan Kebijakan Privasi")
+		return
+	}
+	if body.AsCreator && !body.AcceptCreatorTerms {
+		errJSON(w, http.StatusBadRequest, "Kreator harus menyetujui perjanjian kreator (karya yang diunggah milik sendiri)")
+		return
+	}
 	if name == "" {
 		name = username
 	}
@@ -268,7 +279,7 @@ func (s *Server) postSignup(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, err := s.createUser(r.Context(), newUser{
 		Username: username, Email: email, Name: name, Role: role,
-		PasswordHash: string(hash), City: city,
+		PasswordHash: string(hash), City: city, TermsAccepted: true, CreatorTermsAccepted: body.AsCreator,
 	})
 	if err != nil {
 		if msg := uniqueViolationMessage(err); msg != "" {
@@ -360,6 +371,8 @@ type newUser struct {
 	PasswordHash                      string // kosong = tanpa password (akun Google)
 	GoogleSub                         string
 	EmailVerified                     bool
+	TermsAccepted                     bool // stamps users.terms_accepted_at
+	CreatorTermsAccepted              bool // stamps users.creator_terms_accepted_at
 }
 
 func (s *Server) createUser(ctx context.Context, nu newUser) (string, error) {
@@ -371,10 +384,13 @@ func (s *Server) createUser(ctx context.Context, nu newUser) (string, error) {
 
 	userID := "u-" + randomHex(6)
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO users (id, username, email, name, role, password_hash, google_sub, email_verified)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		INSERT INTO users (id, username, email, name, role, password_hash, google_sub, email_verified,
+		                   terms_accepted_at, creator_terms_accepted_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,
+		        CASE WHEN $9 THEN now() END, CASE WHEN $10 THEN now() END)`,
 		userID, nu.Username, nu.Email, nu.Name, nu.Role,
-		nilIfEmpty(nu.PasswordHash), nilIfEmpty(nu.GoogleSub), nu.EmailVerified); err != nil {
+		nilIfEmpty(nu.PasswordHash), nilIfEmpty(nu.GoogleSub), nu.EmailVerified,
+		nu.TermsAccepted, nu.CreatorTermsAccepted); err != nil {
 		return "", err
 	}
 	// akun kreator langsung mendapat profil toko (designers) yang tertaut
