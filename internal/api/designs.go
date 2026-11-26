@@ -22,20 +22,20 @@ type DesignSubmission struct {
 	Status     string   `json:"status"`
 	Note       string   `json:"note,omitempty"`
 	Tags       []string `json:"tags"`
-	Categories []string `json:"categories"`
+	Attributes []string `json:"attributes"` // attribute value ids (tema, gaya, acara)
 	ListingID  string   `json:"listingId,omitempty"`
 }
 
 const submissionCols = `
 	SELECT id, (extract(epoch FROM created_at)*1000)::bigint, title, designer_name,
 	       product_type_id, color_id, price, uri, status, COALESCE(note,''),
-	       tags, category_ids, COALESCE(published_listing_id,'')
+	       tags, attribute_ids, COALESCE(published_listing_id,'')
 	FROM design_submissions`
 
 func scanSubmission(row interface{ Scan(...any) error }) (DesignSubmission, error) {
 	var d DesignSubmission
 	err := row.Scan(&d.ID, &d.T, &d.Title, &d.Designer, &d.Type, &d.Color, &d.Price,
-		&d.URI, &d.Status, &d.Note, &d.Tags, &d.Categories, &d.ListingID)
+		&d.URI, &d.Status, &d.Note, &d.Tags, &d.Attributes, &d.ListingID)
 	return d, err
 }
 
@@ -78,7 +78,9 @@ func (s *Server) getDesigns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"designs": designs})
 }
 
-// cleanTags: tag bebas ala hashtag — huruf kecil, tanpa '#', maks 8 tag.
+// cleanTags: tag bebas ala hashtag — huruf kecil, tanpa '#', maks 13 tag.
+const maxTags = 13
+
 func cleanTags(raw []string) []string {
 	seen := map[string]bool{}
 	out := []string{}
@@ -89,7 +91,7 @@ func cleanTags(raw []string) []string {
 		}
 		seen[t] = true
 		out = append(out, t)
-		if len(out) == 8 {
+		if len(out) == maxTags {
 			break
 		}
 	}
@@ -105,7 +107,7 @@ func (s *Server) postDesign(w http.ResponseWriter, r *http.Request) {
 		Price      int      `json:"price"`
 		URI        string   `json:"uri"`
 		Tags       []string `json:"tags"`
-		Categories []string `json:"categories"`
+		Attributes []string `json:"attributes"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		errJSON(w, http.StatusRequestEntityTooLarge, "Ukuran gambar terlalu besar (maks ±1 MB)")
@@ -146,16 +148,10 @@ func (s *Server) postDesign(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	// simpan hanya kategori yang memang ada, maksimal 3
-	cats := []string{}
-	for _, c := range body.Categories {
-		var ok bool
-		if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM categories WHERE id=$1)`, c).Scan(&ok); err == nil && ok {
-			cats = append(cats, c)
-		}
-		if len(cats) == 3 {
-			break
-		}
+	attrs, err := s.cleanAttributes(ctx, body.Attributes)
+	if err != nil {
+		errJSON(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	id := fmt.Sprintf("ds-%06d", rand.IntN(1_000_000))
@@ -166,10 +162,10 @@ func (s *Server) postDesign(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if _, err := s.pool.Exec(ctx,
-		`INSERT INTO design_submissions (id, designer_id, designer_name, title, product_type_id, color_id, price, uri, tags, category_ids)
+		`INSERT INTO design_submissions (id, designer_id, designer_name, title, product_type_id, color_id, price, uri, tags, attribute_ids)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 		id, designerID, body.Designer, body.Title, body.Type, body.Color, body.Price, body.URI,
-		cleanTags(body.Tags), cats); err != nil {
+		cleanTags(body.Tags), attrs); err != nil {
 		errJSON(w, http.StatusBadRequest, "Bad request")
 		return
 	}
@@ -179,6 +175,48 @@ func (s *Server) postDesign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"design": d})
+}
+
+// cleanAttributes keeps the attribute values that exist, at most
+// attributes.max_per_design per attribute, in the order they were sent.
+func (s *Server) cleanAttributes(ctx context.Context, ids []string) ([]string, error) {
+	out := []string{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT av.id, av.attribute_id, a.max_per_design
+		FROM attribute_values av JOIN attributes a ON a.id = av.attribute_id
+		WHERE av.id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type info struct {
+		attr string
+		max  int
+	}
+	known := map[string]info{}
+	for rows.Next() {
+		var id string
+		var in info
+		if err := rows.Scan(&id, &in.attr, &in.max); err != nil {
+			return nil, err
+		}
+		known[id] = in
+	}
+	used := map[string]int{}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		in, ok := known[id]
+		if !ok || seen[id] || used[in.attr] >= in.max {
+			continue
+		}
+		seen[id] = true
+		used[in.attr]++
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 func (s *Server) patchDesign(w http.ResponseWriter, r *http.Request) {
@@ -250,7 +288,7 @@ func (s *Server) publishSubmission(ctx context.Context, subID string) (string, e
 	var price int
 	var tags, cats []string
 	if err := tx.QueryRow(ctx, `
-		SELECT designer_id, published_listing_id, title, product_type_id, uri, price, tags, category_ids
+		SELECT designer_id, published_listing_id, title, product_type_id, uri, price, tags, attribute_ids
 		FROM design_submissions WHERE id=$1 FOR UPDATE`, subID).
 		Scan(&designerID, &published, &title, &ptID, &uri, &price, &tags, &cats); err != nil {
 		return "", err
@@ -273,8 +311,8 @@ func (s *Server) publishSubmission(ctx context.Context, subID string) (string, e
 	}
 	for _, c := range cats {
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO design_categories (design_id, category_id)
-			 SELECT $1, id FROM categories WHERE id=$2 ON CONFLICT DO NOTHING`, designID, c); err != nil {
+			`INSERT INTO design_attributes (design_id, value_id)
+			 SELECT $1, id FROM attribute_values WHERE id=$2 ON CONFLICT DO NOTHING`, designID, c); err != nil {
 			return "", err
 		}
 	}
@@ -287,7 +325,11 @@ func (s *Server) publishSubmission(ctx context.Context, subID string) (string, e
 		`UPDATE design_submissions SET published_listing_id=$2 WHERE id=$1`, subID, listingID); err != nil {
 		return "", err
 	}
-	return listingID, tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	s.reindexSearch(ctx, listingID)
+	return listingID, nil
 }
 
 func (s *Server) loadSubmission(ctx context.Context, id string) (*DesignSubmission, error) {

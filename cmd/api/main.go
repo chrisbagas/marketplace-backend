@@ -42,6 +42,10 @@ func main() {
 	if err := db.SeedIfEmpty(ctx, pool); err != nil {
 		log.Fatalf("seed gagal: %v", err)
 	}
+	// rebuild the search index: cheap, and it picks up anything changed outside the API
+	if err := db.ReindexSearch(ctx, pool, nil); err != nil {
+		log.Fatalf("indeks pencarian: %v", err)
+	}
 	production := os.Getenv("APP_ENV") == "production"
 	if !production {
 		// akun demo (admin / raka / demo) bisa langsung dipakai login di dev

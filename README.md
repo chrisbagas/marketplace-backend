@@ -68,7 +68,10 @@ peran salah → `403`.
 | `/api/auth/password/forgot` | POST | publik | `{email}` → kirim link reset (respons selalu sama) |
 | `/api/auth/password/reset` | POST | publik | `{token, password}` → password baru + sesi baru |
 | `/api/auth/google/start`, `/callback` | GET | publik | Alur OAuth Google (redirect) |
-| `/api/products`, `/api/products/{id}`, `/api/categories` | GET | publik | Katalog |
+| `/api/products`, `/api/products/{id}` | GET | publik | Katalog (daftar tanpa halaman + detail) |
+| `/api/search` | GET | publik | Pencarian katalog: `q`, `type`, `category`, `attr`, `color`, `min`, `max`, `designer`, `sort`, `page`, `limit` → produk + jumlah per filter |
+| `/api/search/suggest`, `/api/taxonomy` | GET | publik | Saran saat mengetik · kategori, atribut & warna beserta jumlah produknya |
+| `/api/search/insights`, `/api/search/synonyms(/{id})`, `/api/attributes/{id}/values`, `/api/attribute-values/{id}` | GET/POST/PATCH/DELETE | admin | Pencarian tanpa hasil, sinonim, pilihan atribut |
 | `/api/checkout/quote` | POST | login | `{items, courier, voucher}` → ringkasan harga dari server (harga, ongkir, diskon) |
 | `/api/orders` | POST | login | Buat pesanan — harga dihitung ulang di server, tertaut ke akun |
 | `/api/orders` | GET | admin | Daftar pesanan `?status=&q=&limit=&offset=` → `{orders, total}` |

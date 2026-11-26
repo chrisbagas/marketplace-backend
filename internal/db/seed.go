@@ -77,17 +77,25 @@ func AvatarURI(hue int, name string) string {
 	return "data:image/svg+xml," + url.PathEscape(svg)
 }
 
-// seedDesignCategories: kategori desain seed — sama dengan backfill di
-// migrations/002 (yang hanya berlaku untuk DB lama).
-var seedDesignCategories = map[string][]string{
-	"anak-senja":      {"senja", "tipografi"},
+// seedDesignAttributes: tema/gaya of the seed designs (attribute value ids) —
+// same as the backfills in migrations/002 + 015, which only reach old DBs.
+var seedDesignAttributes = map[string][]string{
+	"anak-senja":      {"senja", "tipografi", "retro"},
 	"kopi-dulu":       {"kopi", "tipografi"},
-	"kawung-modern":   {"batik"},
-	"komodo-trail":    {"alam"},
-	"ombak-nusantara": {"laut", "alam"},
-	"jaga-laut":       {"laut", "alam"},
-	"rendang-love":    {"kuliner", "tipografi"},
-	"tropis":          {"alam"},
+	"kawung-modern":   {"batik", "minimalis"},
+	"komodo-trail":    {"alam", "wisata", "hewan"},
+	"ombak-nusantara": {"laut", "alam", "ilustrasi"},
+	"jaga-laut":       {"laut", "alam", "hewan"},
+	"rendang-love":    {"kuliner", "tipografi", "lucu"},
+	"tropis":          {"alam", "ilustrasi"},
+}
+
+// seedTypeCategories: product type -> category + display order (mirrors migration 015).
+var seedTypeCategories = map[string]struct {
+	category string
+	sort     int
+}{
+	"kaos": {"pakaian", 1}, "hoodie": {"pakaian", 2}, "totebag": {"tas", 3}, "mug": {"rumah", 4},
 }
 
 // SeedIfEmpty populates catalog + 14 days of demo analytics on first run.
@@ -138,8 +146,8 @@ func SeedIfEmpty(ctx context.Context, pool *pgxpool.Pool) error {
 	for id, pt := range cat.ProductTypes {
 		area := printAreas[id]
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO product_types (id, label, base_price, print_max_w_cm, print_max_h_cm) VALUES ($1,$2,$3,$4,$5)`,
-			id, pt.Label, pt.Base, area[0], area[1]); err != nil {
+			`INSERT INTO product_types (id, label, base_price, print_max_w_cm, print_max_h_cm, category_id, sort) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+			id, pt.Label, pt.Base, area[0], area[1], nilIfBlank(seedTypeCategories[id].category), seedTypeCategories[id].sort); err != nil {
 			return err
 		}
 		for i, s := range pt.Sizes {
@@ -171,11 +179,11 @@ func SeedIfEmpty(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 	}
-	for design, cats := range seedDesignCategories {
-		for _, c := range cats {
+	for design, values := range seedDesignAttributes {
+		for _, v := range values {
 			if _, err := tx.Exec(ctx,
-				`INSERT INTO design_categories (design_id, category_id)
-				 SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM designs WHERE id = $1)`, design, c); err != nil {
+				`INSERT INTO design_attributes (design_id, value_id)
+				 SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM designs WHERE id = $1)`, design, v); err != nil {
 				return err
 			}
 		}
@@ -398,4 +406,11 @@ func seedOrders(ctx context.Context, tx pgx.Tx, cat *seedCatalog, rng *rand.Rand
 		}
 	}
 	return nil
+}
+
+func nilIfBlank(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
