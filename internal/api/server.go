@@ -110,6 +110,10 @@ func NewServer(pool *pgxpool.Pool, uploadDir string, auth AuthConfig) *Server {
 	s.route("GET /api/reviews", "/api/reviews", s.getReviews)
 	s.route("POST /api/reviews", "/api/reviews", s.authed(s.postReview)) // bukti: pesanan selesai milik akun ini
 	s.route("PATCH /api/reviews", "/api/reviews", s.authed(s.patchReview, admin))
+	// reports of IP infringement / inappropriate designs: public submit, admin review
+	s.route("POST /api/reports", "/api/reports", s.optionalUser(s.postReport))
+	s.route("GET /api/reports", "/api/reports", s.authed(s.getReports, admin))
+	s.route("PATCH /api/reports/{id}", "/api/reports", s.authed(s.patchReport, admin))
 
 	return s
 }

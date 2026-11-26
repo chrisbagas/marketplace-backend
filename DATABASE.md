@@ -3,14 +3,14 @@
 Database: **PostgreSQL 16** · skema penuh di [`internal/db/schema.sql`](internal/db/schema.sql)
 (dimigrasikan otomatis saat API pertama kali start, dicatat di `schema_migrations`).
 
-36 tabel dalam 7 kelompok:
+37 tabel dalam 7 kelompok:
 
 | Kelompok | Tabel |
 |---|---|
 | **Identitas** | `users` (profil + preferensi + kredensial), `sessions` (sesi login), `auth_tokens` (link verifikasi & reset password), `designers`, `user_designs` (desain custom pribadi — tanpa royalti) |
 | **Katalog** | `product_types`, `colors`, `product_type_colors`, `product_type_sizes`, `designs`, `listings`, `categories` (product tree), `attributes`, `attribute_values`, `design_attributes` |
 | **Pencarian** | `listing_search` (search document per listing), `search_words` (vocabulary for typo correction), `search_synonyms` |
-| **Transaksi** | `orders`, `order_items`, `payments`, `order_events`, `reviews` (ulasan terverifikasi + moderasi), `vouchers`, `payment_notifications` (jejak webhook/sync gateway) |
+| **Transaksi** | `orders`, `order_items`, `payments`, `order_events`, `reviews` (ulasan terverifikasi + moderasi), `design_reports` (laporan pelanggaran HKI / konten; admin menonaktifkan listing atau menolak), `vouchers`, `payment_notifications` (jejak webhook/sync gateway) |
 | **Kreator** | `design_submissions` (terbit jadi listing saat disetujui), `royalties`, `payouts` |
 | **Keuangan** | `producers` (vendor cetak + kirim), `producer_charges` (hak vendor per pesanan), `producer_payouts` (transfer ke vendor) |
 | **Analitik** | `track_events`, `web_vitals`, `api_metrics`, `search_terms`, `day_stats` |
@@ -48,6 +48,9 @@ erDiagram
     listings ||--|| listing_search : "indexed as"
     listings ||--o{ reviews : "dinilai"
     orders ||--o{ reviews : "bukti pembelian"
+    listings ||--o{ design_reports : "dilaporkan"
+    designs ||--o{ design_reports : ""
+    users ||--o{ design_reports : "melapor (nullable)"
     listings ||--o| design_submissions : "diterbitkan dari"
 
     orders ||--o{ order_items : "berisi"
@@ -313,6 +316,20 @@ erDiagram
         text comment
         review_status status "review | disetujui | ditolak"
         text note "catatan moderasi"
+    }
+    design_reports {
+        bigint id PK
+        text listing_id FK
+        text design_id FK
+        text reporter_user_id FK "nullable; NULL = tidak login"
+        text reason "hak-cipta | merek-dagang | konten-tidak-pantas | lainnya"
+        text email "kontak pelapor"
+        text description
+        text evidence_url "nullable"
+        text status "baru | ditinjau | ditindak | ditolak"
+        text admin_note "nullable"
+        timestamptz created_at
+        timestamptz updated_at
     }
     user_designs {
         bigint id PK

@@ -91,6 +91,9 @@ peran salah → `403`.
 | `/api/reviews` | GET | publik | Ulasan yang lolos moderasi |
 | `/api/reviews` | POST | login | Ulasan — hanya untuk pesanan selesai milik akun ini |
 | `/api/reviews` | PATCH | admin | Moderasi ulasan |
+| `/api/reports` | POST | publik (dibatasi 5/jam per IP) | Laporkan desain: `{listingId, reason, email, description, evidenceUrl?}` |
+| `/api/reports` | GET | admin | Daftar laporan (`?status=baru\|ditinjau\|ditindak\|ditolak`) + jumlah per status |
+| `/api/reports/{id}` | PATCH | admin | `{action: review \| takedown \| reject, note}` — takedown menonaktifkan listing + email ke kreator |
 | `/api/profile`, `/api/user-designs` | * | login | Profil & desain custom milik akun |
 | `/api/uploads` | POST | login | Unggah gambar |
 | `/api/track` | POST / GET | publik / admin | Rekam / baca event perilaku |

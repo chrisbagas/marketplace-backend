@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -108,14 +109,14 @@ func (s *Server) patchListing(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if body.Active != nil {
-		if _, err := s.pool.Exec(ctx, `UPDATE listings SET active=$2 WHERE id=$1`, id, *body.Active); err != nil {
+		if err := s.setListingActive(ctx, id, *body.Active); err != nil {
 			errJSON(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	}
 
-	// nama & status aktif ikut menentukan hasil pencarian
-	if body.Title != nil || body.Active != nil {
+	// the name also determines search results (setListingActive reindexes on its own)
+	if body.Title != nil {
 		s.reindexSearch(ctx, id)
 	}
 
@@ -125,4 +126,14 @@ func (s *Server) patchListing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"product": p})
+}
+
+// setListingActive switches a listing on or off in the catalog and reindexes
+// search. Shared by the creator toggle (patchListing) and report takedowns.
+func (s *Server) setListingActive(ctx context.Context, id string, active bool) error {
+	if _, err := s.pool.Exec(ctx, `UPDATE listings SET active=$2 WHERE id=$1`, id, active); err != nil {
+		return err
+	}
+	s.reindexSearch(ctx, id)
+	return nil
 }
