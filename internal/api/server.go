@@ -120,14 +120,8 @@ func (s *Server) route(pattern, metricRoute string, h http.HandlerFunc) {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// CORS: dev berjalan lintas port (Next 3000 → API 8080)
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
+	// No CORS: the browser only talks to the Next proxy (same origin) and the
+	// Midtrans webhook is server-to-server.
 	s.mux.ServeHTTP(w, r)
 }
 

@@ -6,7 +6,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"karyakita/api/internal/api"
@@ -15,6 +17,9 @@ import (
 	"karyakita/api/internal/mail"
 	"karyakita/api/internal/midtrans"
 )
+
+// shutdownGrace is how long in-flight requests get to finish after SIGINT/SIGTERM.
+const shutdownGrace = 20 * time.Second
 
 func main() {
 	// dev: baca backend/.env bila ada (tidak menimpa variabel yang sudah di-set)
@@ -32,6 +37,9 @@ func main() {
 		port = "8081" // frontend (next.config.ts) mem-proxy ke port ini
 	}
 
+	// SIGINT/SIGTERM cancel sigCtx: the server stops accepting and drains in-flight requests.
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
 	ctx := context.Background()
 	pool, err := db.Connect(ctx, dsn, 30*time.Second)
 	if err != nil {
@@ -86,11 +94,32 @@ func main() {
 	log.Printf("KaryaKita API siap di http://localhost:%s (db ok, skema termigrasi, upload → %s)", port, uploadDir)
 	srv := api.NewServer(pool, uploadDir, authCfg)
 	srv.SetPayments(newPayments(production))
-	// pesanan "tiba" selesai otomatis 2 hari setelah paket sampai (dicek tiap 10 menit)
-	go srv.RunOrderJobs(ctx, 10*time.Minute)
-	if err := http.ListenAndServe(":"+port, srv); err != nil {
-		log.Fatal(err)
+	// pesanan "tiba" selesai otomatis 2 hari setelah paket sampai (dicek tiap 10 menit).
+	// The jobs get their own context: it is cancelled only after HTTP requests have drained.
+	jobsCtx, stopJobs := context.WithCancel(context.Background())
+	defer stopJobs()
+	jobsDone := make(chan struct{})
+	go func() {
+		defer close(jobsDone)
+		srv.RunOrderJobs(jobsCtx, 10*time.Minute)
+	}()
+	httpSrv := &http.Server{
+		Addr:              ":" + port,
+		Handler:           srv,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second, // uploads are JSON capped at 2 MB
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
+	serveErr := serve(sigCtx, httpSrv, shutdownGrace)
+	// Requests are drained: stop background jobs and wait for them before the pool closes.
+	stopJobs()
+	<-jobsDone
+	pool.Close()
+	if serveErr != nil {
+		log.Fatalf("server: %v", serveErr)
+	}
+	log.Print("shutdown complete")
 }
 
 func envOr(key, def string) string {

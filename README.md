@@ -109,7 +109,7 @@ internal/db/
   seed.go              data demo deterministik
   seed_data.json       katalog (diekspor dari frontend agar identik)
 internal/api/
-  server.go            router + tabel akses, CORS, middleware metrik
+  server.go            router + tabel akses, middleware metrik (tanpa CORS: trafik browser same-origin lewat proxy Next)
   auth.go              signup/login/logout, sesi cookie, s.authed (cek peran)
   auth_email.go        verifikasi email + lupa/reset password (token sekali pakai)
   google.go            login Google (OAuth code flow + userinfo)
