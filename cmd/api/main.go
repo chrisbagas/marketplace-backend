@@ -14,7 +14,12 @@ import (
 	"karyakita/api/internal/envfile"
 	"karyakita/api/internal/mail"
 	"karyakita/api/internal/midtrans"
+	"karyakita/api/internal/obs"
 )
+
+// release is stamped at build time: go build -ldflags "-X main.release=$(git rev-parse --short HEAD)".
+// Empty falls back to the SENTRY_RELEASE env var.
+var release string
 
 func main() {
 	// dev: baca backend/.env bila ada (tidak menimpa variabel yang sudah di-set)
@@ -22,6 +27,18 @@ func main() {
 		log.Fatalf("baca .env: %v", err)
 	} else if n > 0 {
 		log.Printf(".env dimuat (%d variabel)", n)
+	}
+	production := os.Getenv("APP_ENV") == "production"
+	obs.SetupLogging(production)
+	// Sentry stays off unless SENTRY_DSN is set. flush runs on normal return
+	// (graceful shutdown); a log.Fatal exit skips it.
+	flushSentry, err := obs.InitSentry(obs.ConfigFromEnv(release))
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	defer flushSentry()
+	if obs.Enabled() {
+		log.Printf("Sentry aktif (environment=%s, release=%q)", obs.ConfigFromEnv(release).Environment, release)
 	}
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -49,7 +66,6 @@ func main() {
 	if err := db.ReindexSearch(ctx, pool, nil); err != nil {
 		log.Fatalf("indeks pencarian: %v", err)
 	}
-	production := os.Getenv("APP_ENV") == "production"
 	if !production {
 		// akun demo (admin / raka / demo) bisa langsung dipakai login di dev
 		demoPass := os.Getenv("DEMO_PASSWORD")

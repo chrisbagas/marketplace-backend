@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"karyakita/api/internal/mail"
+	"karyakita/api/internal/obs"
 )
 
 type Server struct {
@@ -134,18 +135,55 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
+	wrote  bool // headers already sent (a panic after that can no longer become a 500)
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
+	r.wrote = true
 	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	r.wrote = true
+	return r.ResponseWriter.Write(b)
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
+// serve runs the handler; a panic becomes a 500 JSON response, is logged with its
+// stack and reported to Sentry (when enabled) instead of killing the connection.
+// It returns true when the handler panicked.
+func (s *Server) serve(rec *statusRecorder, r *http.Request, route string, next http.HandlerFunc) (panicked bool) {
+	defer func() {
+		p := recover()
+		if p == nil {
+			return
+		}
+		if p == http.ErrAbortHandler {
+			panic(p) // deliberate abort: net/http handles it quietly
+		}
+		panicked = true
+		obs.CapturePanic(r, route, p)
+		if !rec.wrote {
+			errJSON(rec, http.StatusInternalServerError, "terjadi kesalahan pada server")
+		} else {
+			rec.status = http.StatusInternalServerError // for the metrics row
+		}
+	}()
+	next(rec, r)
+	return false
 }
 
 func (s *Server) withMetrics(route string, next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		t0 := time.Now()
-		next(rec, r)
+		panicked := s.serve(rec, r, route, next)
+		if !panicked && rec.status >= http.StatusInternalServerError {
+			obs.CaptureServerError(r, route, rec.status)
+		}
 		ms := float64(time.Since(t0).Microseconds()) / 1000
 		go func(method string, status int) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

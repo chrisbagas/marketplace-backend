@@ -18,7 +18,7 @@ Saat pertama kali start, API otomatis:
 3. di luar produksi: memberi password ke akun demo (lihat di bawah).
 
 Konfigurasi lewat env var (lihat `.env.example`): `DATABASE_URL`, `PORT` (default 8081),
-`UPLOAD_DIR`, `APP_ENV`, `DEMO_PASSWORD`, `COOKIE_SECURE`, `APP_URL`, `SMTP_*`, `MAIL_FROM`, `GOOGLE_*`.
+`UPLOAD_DIR`, `APP_ENV`, `DEMO_PASSWORD`, `COOKIE_SECURE`, `APP_URL`, `SMTP_*`, `MAIL_FROM`, `GOOGLE_*`, `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE`.
 
 ## Autentikasi
 
@@ -179,3 +179,22 @@ menunggu-pembayaran → dibayar → produksi → dikirim → tiba → selesai
 - **Biaya**: ditentukan Midtrans per kanal (QRIS dan VA paling murah; e-wallet sekitar 2%). Matikan
   kanal yang tidak diperlukan di dashboard Midtrans atau lewat `MIDTRANS_ENABLED_PAYMENTS`.
 - **Belum ada**: refund / chargeback (notifikasinya hanya dicatat) dan rekonsiliasi pencairan dana.
+
+## Observabilitas
+
+- **Log**: `log/slog`. `APP_ENV=production` → JSON satu baris per entri di stderr; selain itu teks.
+  Semua `log.Printf` yang sudah ada otomatis lewat handler yang sama (level INFO).
+- **Sentry** (`internal/obs`): aktif hanya bila `SENTRY_DSN` diisi; kosong → tidak ada yang diinisialisasi.
+  `SENTRY_ENVIRONMENT` (bawaan: `APP_ENV`), release dari variabel build:
+  `go build -ldflags "-X main.release=$(git rev-parse --short HEAD)" ./cmd/api` (kosong → `SENTRY_RELEASE`).
+  Yang dilaporkan: **panic** di handler mana pun yang didaftarkan lewat `s.route` (dipulihkan jadi
+  respons `500 {"error": ...}` dan dikirim sebagai exception dengan stack) dan **respons 5xx** yang
+  ditulis handler sendiri (pesan `HTTP 502: GET /api/...`, ditandai `route`). Query string, cookie,
+  dan header auth tidak dikirim. Event dikirim ulang (flush) saat API berhenti normal (shutdown).
+- **Uptime**: tidak ada kode, cukup monitor eksternal ke `GET /healthz` (200 `{"ok":true}`; 503 bila
+  database tidak terjangkau — itu yang membuat alarm berbunyi untuk "API hidup tapi DB mati").
+  UptimeRobot: *Add New Monitor* → HTTP(s) → URL `https://<domain>/healthz`, interval 1 menit
+  (paket gratis 5 menit), alert contact email/Telegram. Better Stack: *Monitors → Create* →
+  "HTTP status" + expected status 200 + check frequency 1 minute, notifikasi email/Telegram.
+  Arahkan ke domain publik (lewat reverse proxy), bukan ke port API langsung, agar proxy ikut terpantau;
+  `/healthz` di frontend tidak ada, jadi pastikan reverse proxy meneruskan `/healthz` ke API.
