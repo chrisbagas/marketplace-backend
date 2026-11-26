@@ -48,7 +48,7 @@ func (s *Server) postTrack(w http.ResponseWriter, r *http.Request) {
 		if term := strings.ToLower(strings.TrimSpace(body.Label)); term != "" {
 			_, _ = s.pool.Exec(ctx,
 				`INSERT INTO search_terms (term, count) VALUES ($1, 1)
-				 ON CONFLICT (term) DO UPDATE SET count = search_terms.count + 1`, term)
+				 ON CONFLICT (term) DO UPDATE SET count = search_terms.count + 1, last_at = now()`, term)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
